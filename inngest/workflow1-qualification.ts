@@ -1,6 +1,6 @@
 import { inngest } from './client'
-import { qualifyLead } from '@agents/agent1-qualification'
-import { supabase, type Lead } from '@lib/supabase'
+import { qualifyLead } from '../src/agents/agent1-qualification'
+import { supabase, type Lead } from '../src/lib/supabase'
 
 interface LeadIngestedEvent {
   data: {

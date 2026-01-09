@@ -1,5 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk'
-import { supabase, type Lead, type GHLRecord } from '@lib/supabase'
+import { supabase, type Lead, type GHLRecord } from '../lib/supabase'
 
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
