@@ -1,0 +1,9 @@
+{
+  "version": "1.0",
+  "id": "jsb-media-sales-agent",
+  "name": "JSB Media Sales Agent",
+  "sdk": {
+    "language": "ts",
+    "framework": "vercel"
+  }
+}

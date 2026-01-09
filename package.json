@@ -1,0 +1,24 @@
+{
+  "name": "jsb-media-sales-agent",
+  "version": "0.1.0",
+  "description": "Autonomous AI Sales Agent for JSB Media",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vercel dev",
+    "build": "tsc",
+    "type-check": "tsc --noEmit",
+    "inngest:dev": "inngest dev -u http://localhost:3000/api/inngest"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.20.0",
+    "@inngest/sdk": "^3.13.0",
+    "@supabase/supabase-js": "^2.38.0",
+    "@vercel/functions": "^1.0.0",
+    "dotenv": "^16.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "typescript": "^5.3.3"
+  }
+}
