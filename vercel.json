@@ -1,4 +1,9 @@
 {
+  "functions": {
+    "api/*.ts": {
+      "runtime": "@vercel/node@3"
+    }
+  },
   "crons": [
     {
       "path": "/api/cron-ingest-daily-visitors",

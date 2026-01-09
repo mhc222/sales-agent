@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'http'
-import { inngest } from '../../inngest/client'
+import { inngest } from '../inngest/client'
 
 const inngestClient = inngest
 

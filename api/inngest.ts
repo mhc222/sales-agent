@@ -1,6 +1,6 @@
 import { serve } from 'inngest/next'
-import { inngest } from '../../inngest/client'
-import { qualificationAndResearch } from '../../inngest/workflow1-qualification'
+import { inngest } from '../inngest/client'
+import { qualificationAndResearch } from '../inngest/workflow1-qualification'
 
 // Register all Inngest functions here
 export default serve({
