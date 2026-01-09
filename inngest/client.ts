@@ -1,4 +1,4 @@
-import { Inngest } from '@inngest/sdk'
+import { Inngest } from 'inngest'
 
 export const inngest = new Inngest({
   id: 'jsb-media-sales-agent',

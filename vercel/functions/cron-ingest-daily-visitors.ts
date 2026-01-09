@@ -1,11 +1,60 @@
-import { VercelRequest, VercelResponse } from '@vercel/functions'
-import { inngest } from '@inngest/sdk'
+import type { IncomingMessage, ServerResponse } from 'http'
+import { inngest } from '../../inngest/client'
 
 const inngestClient = inngest
 
+interface AudienceLabVisitor {
+  FIRST_NAME: string
+  LAST_NAME: string
+  BUSINESS_VERIFIED_EMAILS: string
+  JOB_TITLE: string
+  HEADLINE: string
+  DEPARTMENT: string
+  SENIORITY_LEVEL: string
+  INFERRED_YEARS_EXPERIENCE: string
+  LINKEDIN_URL: string
+  COMPANY_NAME: string
+  COMPANY_LINKEDIN_URL: string
+  COMPANY_DOMAIN: string
+  COMPANY_EMPLOYEE_COUNT: string
+  COMPANY_REVENUE: string
+  COMPANY_INDUSTRY: string
+  COMPANY_DESCRIPTION: string
+  EVENT_DATA: string
+  EVENT_TYPE: string
+  URL: string
+}
+
+interface AudienceLabResponse {
+  segment_id: string
+  segment_name: string
+  total_records: number
+  page_size: number
+  page: number
+  total_pages: number
+  has_more: boolean
+  data: AudienceLabVisitor[]
+}
+
+function parseEmployeeCount(str: string): number | undefined {
+  if (!str) return undefined
+  // Handle formats like "26 to 50", "1 to 10", "500+"
+  const match = str.match(/(\d+)/)
+  return match ? parseInt(match[1], 10) : undefined
+}
+
+function parseEventData(jsonStr: string): { url?: string; timeOnPage?: number } {
+  if (!jsonStr) return {}
+  try {
+    return JSON.parse(jsonStr)
+  } catch {
+    return {}
+  }
+}
+
 export default async function handler(
-  request: VercelRequest,
-  response: VercelResponse
+  request: IncomingMessage & { headers: Record<string, string | undefined> },
+  response: ServerResponse & { status: (code: number) => { json: (data: unknown) => void } }
 ) {
   // Verify it's a cron job (or authorized request)
   const cronSecret = process.env.CRON_SECRET
@@ -19,7 +68,6 @@ export default async function handler(
   try {
     console.log('[Cron] Starting daily visitor ingestion...')
 
-    // Step 1: Fetch daily visitors from your API
     const visitorApiUrl = process.env.VISITOR_API_URL
     const visitorApiKey = process.env.VISITOR_API_KEY
 
@@ -27,10 +75,11 @@ export default async function handler(
       throw new Error('Missing visitor API credentials')
     }
 
+    // Fetch from AudienceLab API with X-API-Key header
     const visitorsResponse = await fetch(visitorApiUrl, {
       method: 'GET',
       headers: {
-        Authorization: `Bearer ${visitorApiKey}`,
+        'X-API-Key': visitorApiKey,
         'Content-Type': 'application/json',
       },
     })
@@ -41,50 +90,64 @@ export default async function handler(
       )
     }
 
-    const visitors = await visitorsResponse.json()
+    const apiResponse: AudienceLabResponse = await visitorsResponse.json()
 
-    if (!Array.isArray(visitors)) {
-      throw new Error('Visitor API did not return an array')
-    }
+    // Extract visitors from the data array
+    const visitors = apiResponse.data || []
 
-    console.log(`[Cron] Received ${visitors.length} visitors`)
+    // Filter to only visitors with a verified business email
+    const qualifiedVisitors = visitors.filter(
+      (v) => v.BUSINESS_VERIFIED_EMAILS && v.FIRST_NAME && v.LAST_NAME
+    )
 
-    if (visitors.length === 0) {
+    console.log(
+      `[Cron] Received ${visitors.length} visitors, ${qualifiedVisitors.length} with verified emails`
+    )
+
+    if (qualifiedVisitors.length === 0) {
       return response.status(200).json({
         status: 'success',
-        message: 'No new visitors',
+        message: 'No qualified visitors (with verified emails)',
+        total_visitors: visitors.length,
         processed: 0,
       })
     }
 
-    // Step 2: Send each visitor to Inngest as "lead.ingested" event
-    const events = visitors.map((visitor) => ({
-      name: 'lead.ingested',
-      data: {
-        first_name: visitor.first_name || 'Unknown',
-        last_name: visitor.last_name || 'Unknown',
-        email: visitor.business_verified_emails,
-        job_title: visitor.job_title,
-        headline: visitor.headline,
-        department: visitor.department,
-        seniority_level: visitor.seniority_level,
-        years_experience: visitor.inferred_years_experience,
-        linkedin_url: visitor.linkedin_url,
-        company_name: visitor.company_name,
-        company_linkedin_url: visitor.company_linkedin_url,
-        company_domain: visitor.company_domain,
-        company_employee_count: visitor.company_employee_count,
-        company_revenue: visitor.company_revenue,
-        company_industry: visitor.company_industry,
-        company_description: visitor.company_description,
-        intent_signal: {
-          pages_visited: visitor.pages_visited || [],
-          event_types: visitor.event_types || [],
-          timestamp: new Date().toISOString(),
+    // Map AudienceLab schema to our lead.ingested event format
+    const events = qualifiedVisitors.map((visitor) => {
+      const eventData = parseEventData(visitor.EVENT_DATA)
+
+      return {
+        name: 'lead.ingested' as const,
+        data: {
+          first_name: visitor.FIRST_NAME,
+          last_name: visitor.LAST_NAME,
+          email: visitor.BUSINESS_VERIFIED_EMAILS.split(',')[0].trim(), // Take first email
+          job_title: visitor.JOB_TITLE || undefined,
+          headline: visitor.HEADLINE || undefined,
+          department: visitor.DEPARTMENT || undefined,
+          seniority_level: visitor.SENIORITY_LEVEL || undefined,
+          years_experience: visitor.INFERRED_YEARS_EXPERIENCE
+            ? parseInt(visitor.INFERRED_YEARS_EXPERIENCE, 10)
+            : undefined,
+          linkedin_url: visitor.LINKEDIN_URL || undefined,
+          company_name: visitor.COMPANY_NAME || 'Unknown',
+          company_linkedin_url: visitor.COMPANY_LINKEDIN_URL || undefined,
+          company_domain: visitor.COMPANY_DOMAIN || undefined,
+          company_employee_count: parseEmployeeCount(visitor.COMPANY_EMPLOYEE_COUNT),
+          company_revenue: visitor.COMPANY_REVENUE || undefined,
+          company_industry: visitor.COMPANY_INDUSTRY || undefined,
+          company_description: visitor.COMPANY_DESCRIPTION || undefined,
+          intent_signal: {
+            page_visited: eventData.url || visitor.URL,
+            time_on_page: eventData.timeOnPage,
+            event_type: visitor.EVENT_TYPE,
+            timestamp: new Date().toISOString(),
+          },
+          tenant_id: process.env.TENANT_ID || 'jsb-media-001',
         },
-        tenant_id: process.env.TENANT_ID || 'jsb-media-001',
-      },
-    }))
+      }
+    })
 
     await inngestClient.send(events)
 
@@ -93,7 +156,9 @@ export default async function handler(
     return response.status(200).json({
       status: 'success',
       message: 'Daily ingestion completed',
+      total_visitors: visitors.length,
       processed: events.length,
+      has_more: apiResponse.has_more,
       timestamp: new Date().toISOString(),
     })
   } catch (error) {
