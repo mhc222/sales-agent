@@ -9,6 +9,13 @@ node_modules/
 # Build output
 dist/
 .vercel/
+.next/
+
+# Supabase temp
+supabase/.temp/
+
+# Vercel env snapshot
+.env.vercel
 
 # IDE
 .idea/
@@ -24,3 +31,4 @@ Thumbs.db
 *.log
 npm-debug.log*
 .vercel
+.env*.local

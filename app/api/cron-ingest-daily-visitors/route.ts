@@ -1,7 +1,5 @@
-import type { IncomingMessage, ServerResponse } from 'http'
-import { inngest } from '../inngest/client'
-
-const inngestClient = inngest
+import { NextRequest, NextResponse } from 'next/server'
+import { inngest } from '../../../inngest/client'
 
 interface AudienceLabVisitor {
   FIRST_NAME: string
@@ -38,7 +36,6 @@ interface AudienceLabResponse {
 
 function parseEmployeeCount(str: string): number | undefined {
   if (!str) return undefined
-  // Handle formats like "26 to 50", "1 to 10", "500+"
   const match = str.match(/(\d+)/)
   return match ? parseInt(match[1], 10) : undefined
 }
@@ -52,17 +49,14 @@ function parseEventData(jsonStr: string): { url?: string; timeOnPage?: number } 
   }
 }
 
-export default async function handler(
-  request: IncomingMessage & { headers: Record<string, string | undefined> },
-  response: ServerResponse & { status: (code: number) => { json: (data: unknown) => void } }
-) {
+export async function GET(request: NextRequest) {
   // Verify it's a cron job (or authorized request)
   const cronSecret = process.env.CRON_SECRET
-  const authHeader = request.headers.authorization
+  const authHeader = request.headers.get('authorization')
 
   if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {
     console.error('Unauthorized cron request')
-    return response.status(401).json({ error: 'Unauthorized' })
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
   try {
@@ -105,7 +99,7 @@ export default async function handler(
     )
 
     if (qualifiedVisitors.length === 0) {
-      return response.status(200).json({
+      return NextResponse.json({
         status: 'success',
         message: 'No qualified visitors (with verified emails)',
         total_visitors: visitors.length,
@@ -122,7 +116,7 @@ export default async function handler(
         data: {
           first_name: visitor.FIRST_NAME,
           last_name: visitor.LAST_NAME,
-          email: visitor.BUSINESS_VERIFIED_EMAILS.split(',')[0].trim(), // Take first email
+          email: visitor.BUSINESS_VERIFIED_EMAILS.split(',')[0].trim(),
           job_title: visitor.JOB_TITLE || undefined,
           headline: visitor.HEADLINE || undefined,
           department: visitor.DEPARTMENT || undefined,
@@ -144,16 +138,16 @@ export default async function handler(
             event_type: visitor.EVENT_TYPE,
             timestamp: new Date().toISOString(),
           },
-          tenant_id: process.env.TENANT_ID || 'jsb-media-001',
+          tenant_id: process.env.TENANT_ID!,
         },
       }
     })
 
-    await inngestClient.send(events)
+    await inngest.send(events)
 
     console.log(`[Cron] Successfully sent ${events.length} events to Inngest`)
 
-    return response.status(200).json({
+    return NextResponse.json({
       status: 'success',
       message: 'Daily ingestion completed',
       total_visitors: visitors.length,
@@ -163,10 +157,13 @@ export default async function handler(
     })
   } catch (error) {
     console.error('[Cron] Error during ingestion:', error)
-    return response.status(500).json({
-      status: 'error',
-      message: error instanceof Error ? error.message : 'Unknown error',
-      timestamp: new Date().toISOString(),
-    })
+    return NextResponse.json(
+      {
+        status: 'error',
+        message: error instanceof Error ? error.message : 'Unknown error',
+        timestamp: new Date().toISOString(),
+      },
+      { status: 500 }
+    )
   }
 }

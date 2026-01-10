@@ -3,22 +3,35 @@
   "version": "0.1.0",
   "description": "Autonomous AI Sales Agent for JSB Media",
   "private": true,
-  "type": "module",
   "scripts": {
-    "dev": "vercel dev",
-    "build": "tsc",
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
     "type-check": "tsc --noEmit",
-    "inngest:dev": "inngest dev -u http://localhost:3000/api/inngest"
+    "dev:vercel": "vercel dev",
+    "inngest:dev": "npx inngest-cli dev -u http://localhost:3000/api/inngest",
+    "test:ingest": "npx tsx scripts/test-ingest.ts"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.20.0",
-    "inngest": "^3.13.0",
+    "@anthropic-ai/sdk": "^0.71.2",
     "@supabase/supabase-js": "^2.38.0",
+    "@tailwindcss/postcss": "^4.1.18",
     "@vercel/functions": "^1.0.0",
-    "dotenv": "^16.3.1"
+    "dotenv": "^16.3.1",
+    "inngest": "^3.13.0",
+    "next": "^14.2.35",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",
+    "@types/react": "^19.2.7",
+    "@types/react-dom": "^19.2.3",
+    "autoprefixer": "^10.4.23",
+    "inngest-cli": "^1.16.0",
+    "postcss": "^8.5.6",
+    "tailwindcss": "^4.1.18",
+    "tsx": "^4.7.0",
     "typescript": "^5.3.3"
   }
 }

@@ -235,6 +235,52 @@ Buying Behavior:
    '{"persona_type": "sales_leadership", "decision_level": "ATL", "priority": "medium"}'::jsonb);
 
   -- ============================================================================
+  -- PERSONA: PROFESSIONAL SERVICES (ATL)
+  -- ============================================================================
+  INSERT INTO rag_documents (tenant_id, rag_type, content, metadata) VALUES
+  (tenant_uuid, 'persona',
+   'Persona: Professional Services Partners (Above The Line Decision Maker)
+
+Job Titles: Partner, Principal, Managing Director, Practice Leader (at law firms, accounting firms, consultancies)
+
+What They Care About:
+- Originating new business (growing their book)
+- Differentiating in a competitive market
+- Building thought leadership and visibility
+- Generating qualified leads for their practice
+
+Key KPIs They Track:
+- Origination credit / new client revenue
+- Referral network strength
+- Visibility metrics (speaking, publications, rankings)
+- Client retention rate
+
+How They Spend Their Time:
+- Serving existing clients (billable work)
+- Business development and networking
+- Thought leadership (writing, speaking)
+- Managing their practice team
+
+Common Pain Points:
+1. Referrals are inconsistent - feast or famine new business
+2. Website gets traffic but no qualified consultation requests
+3. Hard to stand out when competitors claim similar expertise
+4. Limited time for business development while serving clients
+
+Buying Behavior:
+- Relationship-driven, values trust and reputation
+- Cares about professional image and compliance
+- Decision timeline: 2-6 weeks, often needs partner consensus
+
+IMPORTANT: Relationship type must be determined from research, not assumed from vertical.
+Professional services firms can be:
+- Direct clients (their firm needs marketing to attract new clients)
+- Referral partners (they advise clients who need marketing)
+- White label (they want to offer marketing services to their clients)
+Analyze their content and context to determine the right relationship type.',
+   '{"persona_type": "professional_services", "decision_level": "ATL", "priority": "medium"}'::jsonb);
+
+  -- ============================================================================
   -- JSB MEDIA VALUE PROPOSITIONS
   -- ============================================================================
   INSERT INTO rag_documents (tenant_id, rag_type, content, metadata) VALUES
