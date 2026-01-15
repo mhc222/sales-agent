@@ -2,11 +2,17 @@
  * Agent 2: Research Agent
  * Synthesizes data from LinkedIn (Apify) and web search (Perplexity)
  * into actionable sales triggers and messaging angles
+ *
+ * Enhanced with multi-query research, pain detection, and intent scoring.
  */
 
 import Anthropic from '@anthropic-ai/sdk'
 import { supabase, type Lead } from '../lib/supabase'
-import type { WebSearchResult } from '../lib/perplexity'
+import type { WebSearchResult, PerplexityResearch } from '../lib/perplexity'
+import { researchCompany } from '../lib/perplexity'
+import { analyzeLinkedInPostsEnhanced, type EnhancedLinkedInAnalysis } from '../lib/linkedin-analyzer'
+import { scoreIntent, type EnhancedIntentScore, type IntentData } from '../lib/intent-scorer'
+import { loadPrompt } from '../lib/prompt-loader'
 
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
@@ -272,111 +278,74 @@ function buildResearchPrompt(
     ? `Content:\n${rawData.perplexityResults.content}\n\nCitations:\n${rawData.perplexityResults.citations.join('\n')}`
     : 'Not available'
 
-  return `You are my "Outbound Research Analyst."
-Your job is to ANALYZE the research data I've gathered and return sales-relevant triggers + messaging angles.
+  // Build intent signal section based on lead source
+  const intentScore = (lead as Record<string, unknown>).intent_score as number | undefined
+  const intentTier = intentScore !== undefined
+    ? intentScore >= 90 ? 'HIGH INTENT (90-100)'
+    : intentScore >= 71 ? 'MEDIUM INTENT (71-89)'
+    : intentScore >= 54 ? 'ENTERING INTENT (54-70)'
+    : 'LOW INTENT (<54)'
+    : 'Unknown'
 
-I have already gathered research from LinkedIn and web sources. Your job is to analyze this data and extract actionable insights.
-
-KEY QUESTION: What is a natural change or shift happening that might create an opening for JSB Media?
-
-JSB Media helps companies with digital marketing and paid media - identity resolution, match rate optimization, AI-powered content, and performance marketing.
-
-Return a list of items, stacked ranked based on:
-1. The level of priority (how urgent/timely)
-2. The level of impact on the business
-
-=== JSB MEDIA CONTEXT ===
-${sharedDocs}
-
-=== IDEAL CUSTOMER PROFILE ===
-${icpDocs}
-
-=== BUYER PERSONAS ===
-${personaDocs}
-
-=== TARGET LEAD ===
-Person:
-- Name: ${lead.first_name} ${lead.last_name}
-- Email: ${lead.email}
-- Title: ${lead.job_title || 'Unknown'}
-- Department: ${lead.department || 'Unknown'}
-- Seniority: ${lead.seniority_level || 'Unknown'}
-
-Company:
-- Name: ${lead.company_name}
-- Domain: ${lead.company_domain || 'Unknown'}
-- Industry: ${lead.company_industry || 'Unknown'}
-- Size: ${lead.company_employee_count || 'Unknown'} employees
-- Revenue: ${lead.company_revenue || 'Unknown'}
-- Description: ${lead.company_description || 'N/A'}
-
-${lead.source === 'intent_data' ? `Intent Signal (Daily Intent Data):
+  const intentSignalSection = lead.source === 'intent_data'
+    ? `Intent Signal (Daily Intent Data):
 - Source: AudienceLab intent data (NOT website visitor)
-- Intent Score: ${(lead as Record<string, unknown>).intent_score || 'N/A'}/100
+- Intent Score: ${intentScore || 'N/A'}/100
+- Intent Tier: ${intentTier}
 - This lead was identified through intent data monitoring, NOT from visiting the JSB Media website
 - DO NOT mention or reference website visits in your analysis
+
+================================================================================
+CRITICAL: WHAT THE INTENT SCORE ACTUALLY MEANS
+================================================================================
+
+AudienceLab measures "DEVIATION FROM STANDARD BEHAVIOR" - not just raw activity.
+
+The score compares this person's LAST 7 DAYS of browsing to their long-term baseline.
+A high score means their behavior SPIKED recently - they just entered an active buying cycle.
+
+This is the difference between:
+- "Bob the Browser" (steady 66→70 score) - casually interested, no urgency
+- "Colin the Customer" (spiked 40→90) - just started actively evaluating, buying window is NOW
+
+INTENT TIERS AND WHAT THEY MEAN:
+
+📍 HIGH INTENT (90-100): ACTIVE BUYING PHASE
+   - Their behavior JUST spiked in the last 7 days
+   - They're on contact pages, resource pages, comparing options
+   - This is "Colin the Customer" - ready to engage NOW
+   - The window is narrow - they're making decisions this week
+   - Outreach approach: Be direct, confident, assume they're evaluating
+
+📍 MEDIUM INTENT (71-89): CONSIDERATION PHASE
+   - Growing upward trend in their behavior
+   - They're looking at competitors, diving deeper
+   - Moving from education to active consideration
+   - Outreach approach: Reference their likely research, show differentiation
+
+📍 ENTERING INTENT (54-70): EARLY RESEARCH PHASE
+   - Just starting their journey
+   - Visiting blogs, educational content
+   - Good for nurture, not aggressive outreach
+   - Outreach approach: Lead with pure value, no hard CTAs
+
+YOUR JOB: Find triggers that explain WHY they entered this buying cycle.
+The intent score tells us WHEN (now). The triggers tell us WHY (pain points).
+
+================================================================================
 
 TARGET ICP FOR INTENT DATA:
 Mid-market companies ($10M-$500M revenue) in competitive, high-volume industries—QSR, e-commerce, travel, tourism, hospitality, franchises, home services—that are scaling across multiple locations or channels but can't compete on marketing sophistication against larger players. They need data-driven, omnichannel activation.
 
 INTENT SIGNAL BEING MEASURED:
-Companies activating multiple channels (Meta, TikTok, Reddit, Search, programmatic, organic) but can't execute cohesively, prove ROI, or scale profitably. They have budgets and ambition, but fragmented data, poor attribution, and no unified insight into what actually works. They need identity resolution and smarter targeting.` : `Intent Signal (Website Visitor):
+Companies activating multiple channels (Meta, TikTok, Reddit, Search, programmatic, organic) but can't execute cohesively, prove ROI, or scale profitably. They have budgets and ambition, but fragmented data, poor attribution, and no unified insight into what actually works. They need identity resolution and smarter targeting.`
+    : `Intent Signal (Website Visitor):
 - Visit Count: ${lead.visit_count || 1} visits to JSB Media website
-- This is a verified intent signal - they are actively researching marketing services.`}
+- This is a verified intent signal - they are actively researching marketing services.`
 
-=== RESEARCH DATA: LINKEDIN PROFILE ===
-${linkedinProfileStr}
-
-=== RESEARCH DATA: LINKEDIN COMPANY ===
-${linkedinCompanyStr}
-
-=== RESEARCH DATA: WEB RESEARCH ===
-${perplexityStr}
-
-================================================================================
-STEP 1 — PERSONA MATCHING
-================================================================================
-Match the lead to one of the buyer personas by analyzing ALL available signals:
-
-1. Title - What is their job title?
-2. Industry - What industry is their company in?
-3. Company description - What does their company do?
-4. Seniority/Department - What level are they? What function?
-5. LinkedIn posts - What do they talk about? What are their priorities?
-6. Company size/revenue - Is this a small business or enterprise?
-
-Combine these signals to determine their actual FUNCTION and persona.
-
-Example: "Partner at Law Firm" could be:
-- marketing_leadership (if they run the firm's marketing)
-- professional_services (if they're a practicing attorney who needs to originate business)
-- owner (if they own/founded the firm)
-
-Example: "CEO" at a 5-person company = owner persona
-Example: "CEO" at a 500-person company = could be marketing_leadership if they oversee marketing directly
-
-The persona should reflect their FUNCTION based on the full picture, not just one data point.
-Determine if they are ATL (Above The Line - decision maker) or BTL (Below The Line - influencer).
-
-================================================================================
-STEP 2 — ANALYZE RESEARCH & EXTRACT TRIGGERS
-================================================================================
-Analyze the research data above and return as many factual sales-relevant triggers from the last 12 months (prefer last 90 days).
-
-Relevant trigger categories:
-• hiring - Hiring for marketing/growth roles (CMO, VP Marketing, Growth Lead, Paid Media, etc.)
-• leadership_change - Leadership changes (new CMO, VP Marketing, Head of Growth, etc.)
-• funding - Funding announcements (with stated growth goals)
-• product_launch - Product/feature launches (new SKUs, upmarket moves)
-• expansion - Geographic expansion (new offices, first hires in region)
-• partnership - Partnerships/channel programs
-• tech_stack - Marketing tech stack changes (new ad platforms, CRM, CDP, etc.)
-• market_shift - ICP or market shift (moving upmarket, new industry)
-• layoffs - Layoffs or hiring freezes in marketing orgs
-• compliance - Compliance/market changes impacting marketing
-• site_visitor - They visited our website (ONLY include if lead source is pixel/website visitor, NOT intent data)
-• thought_leadership - Content themes from their LinkedIn posts that reveal what they care about AND who they serve
-${lead.source === 'intent_data' ? `
+  // Build intent trigger section for intent data leads
+  const intentTriggerSection = lead.source === 'intent_data'
+    ? `
 **INTENT DATA PRIORITY TRIGGERS** (Look for these first for intent leads):
 • multi_channel_struggle - Evidence of running multiple ad channels without cohesion (Meta + Google + TikTok but fragmented)
 • attribution_pain - Posts about not knowing what's working, ROI struggles, measurement challenges
@@ -392,189 +361,275 @@ FOR INTENT LEADS, PRIORITIZE:
 4. Scaling challenges despite having budget
 5. Data quality or audience targeting concerns
 
-These are HIGHER value triggers than generic hiring/funding for intent leads.` : ''}
+These are HIGHER value triggers than generic hiring/funding for intent leads.`
+    : ''
 
-HOW TO ANALYZE POSTS FOR thought_leadership:
+  return loadPrompt('agent2-research', {
+    sharedDocs,
+    icpDocs,
+    personaDocs,
+    firstName: lead.first_name,
+    lastName: lead.last_name,
+    email: lead.email,
+    jobTitle: lead.job_title || 'Unknown',
+    department: lead.department || 'Unknown',
+    seniorityLevel: lead.seniority_level || 'Unknown',
+    companyName: lead.company_name,
+    companyDomain: lead.company_domain || 'Unknown',
+    companyIndustry: lead.company_industry || 'Unknown',
+    companyEmployeeCount: String(lead.company_employee_count || 'Unknown'),
+    companyRevenue: lead.company_revenue || 'Unknown',
+    companyDescription: lead.company_description || 'N/A',
+    intentSignalSection,
+    linkedinProfileStr,
+    linkedinCompanyStr,
+    perplexityStr,
+    intentTriggerSection,
+  })
+}
 
-Step 1 - Identify recurring topics:
-- What subjects do they post about repeatedly?
-- What's their area of expertise?
+// ============================================================================
+// ENHANCED RESEARCH (New Multi-Query Approach)
+// ============================================================================
 
-Step 2 - Determine WHO they're talking TO:
-- Are they advising/warning an audience? (advisory role)
-- Are they showcasing work for clients? (agency role)
-- Are they sharing their own company's challenges? (direct client)
+export interface EnhancedResearchResult extends ResearchResult {
+  // Enhanced signals from new modules
+  perplexityEnhanced: PerplexityResearch | null
+  linkedinEnhanced: EnhancedLinkedInAnalysis | null
+  intentScore: EnhancedIntentScore | null
 
-Step 3 - Extract the INSIGHT, not just the topic:
-- BAD: "Posts about influencer marketing" (too vague)
-- GOOD: "Advises brands on FTC compliance for influencer campaigns - warns about class action risks"
-
-SCORING for thought_leadership:
-- Impact: How much does this reveal about their priorities and who they serve?
-- Recency: Are they posting about this consistently/recently?
-- Relevance: Does this create an opening for JSB Media?
-
-CONTENT INCLUSION for thought_leadership triggers:
-- Score >= 12: Include a key quote in "content_excerpt" that shows their POV
-- Score >= 14: Include full post text in "full_content"
-
-EXAMPLE thought_leadership:
-Posts say: "Brands are being called out for failing to properly disclose paid endorsements... Are your influencer agreements up to par?"
-Analysis:
-- Topic: Influencer marketing compliance
-- Audience: BRANDS (she's advising them, not recruiting plaintiffs)
-- Insight: She's defense-side, helping brands avoid lawsuits
-Output:
-- type: thought_leadership
-- fact: "Advises brands on FTC compliance for influencer marketing - posts about class action risks and disclosure requirements"
-- content_excerpt: "Brands are being called out for failing to properly disclose paid endorsements... Are your influencer agreements up to par?"
-- scores: { impact: 5, recency: 4, relevance: 5, total: 14 }
-
-RULES FOR TRIGGERS:
-- Each trigger must be a FACT found in the research data above
-- Include source + date when available
-- Do NOT generate fluff or guesses
-- You don't have to return all 10 categories - just find the relevant ones from the data
-
-Format each trigger with:
-• Type: [category from list above]
-• Fact: [Concise factual statement]
-• Source: [URL or source]
-• Date: [YYYY-MM-DD if available]
-
-================================================================================
-STEP 3 — STACK RANKING
-================================================================================
-Score each trigger by:
-- Impact (1-5): How significant is this for the business?
-- Recency (1-5): How recent? (Last 30 days = 5, 90 days = 4, 6 months = 3, 12 months = 2)
-- Relevance (1-5): How relevant to JSB Media's marketing services?
-
-Return triggers RANKED highest → lowest by total score.
-
-================================================================================
-STEP 4 — MESSAGING ANGLES
-================================================================================
-Create 3 messaging angles based on the triggers. You can stack multiple triggers together to show what could be a focus for the org as a whole.
-
-Each angle MUST include:
-- The angle/approach
-- Which triggers support it
-- "Why this creates an opening:" - A short breakdown of why this is a good time to reach out
-
-================================================================================
-STEP 5 — RELATIONSHIP TYPE
-================================================================================
-Determine the best relationship type by analyzing:
-1. What they DO (their job function)
-2. WHO they serve (their clients/customers)
-3. What their clients NEED that JSB could provide
-
-Relationship types:
-• direct_client - They need marketing services for themselves
-• referral_partner - They advise/serve clients who need marketing (e.g., law firms, consultants, advisors)
-• white_label - Any agency, firm, or company that could offer JSB services under their own brand to their clients
-• strategic_partner - Co-marketing opportunity, joint content, integrations
-
-HOW TO REASON THROUGH THIS:
-
-Step A: Analyze their content to understand WHO they're talking TO (not just what they talk about)
-- Are they warning/advising clients? → They're an advisor (referral_partner potential)
-- Are they selling services to end customers? → They're direct_client potential
-- Are they an agency serving clients? → They're white_label potential
-
-Step B: For non-direct-client relationships, identify:
-- WHO they serve (their clients)
-- What those clients need that JSB could provide
-- An opening question to explore the relationship
-
-EXAMPLE REASONING (Law firm partner posting about influencer marketing compliance):
-Posts say: "Brands are being called out for failing to properly disclose paid endorsements... Are your influencer agreements up to par?"
-Analysis:
-- She's WARNING brands (not recruiting plaintiffs for lawsuits)
-- Her language is advisory: "ensure your brand is protected"
-- She's on the DEFENSE side - helping brands stay compliant
-- Her CLIENTS are brands doing influencer marketing
-- Those brands need agencies who understand FTC compliance
-Conclusion:
-- Type: referral_partner (not direct_client)
-- Who she serves: "Brands doing influencer marketing who need compliance guidance"
-- Her clients' need: Agencies that won't create legal risk
-- Opening: "Curious how you advise clients on finding agencies that understand disclosure requirements"
-
-EXAMPLE REASONING (Creative agency posting about campaign work):
-Posts say: "Excited to share our latest campaign for [Brand X]... Proud of the results we delivered"
-Analysis:
-- They're an AGENCY serving brand clients
-- They do creative/strategy but may not do paid media in-house
-- Their clients need full-service marketing execution
-- JSB could power their paid media offering
-Conclusion:
-- Type: white_label
-- Who they serve: "Brands needing creative campaigns"
-- Their clients' need: Paid media execution to complement creative
-- Opening: "Do your clients ever ask for paid media services beyond creative?"
-
-================================================================================
-STEP 6 — COMPANY INTEL
-================================================================================
-Extract from the research:
-- tech_stack: What marketing/ad tech do they use?
-- competitors: Who are their main competitors?
-- recent_news: Key recent announcements
-- growth_signals: Signs they're growing/investing
-
-================================================================================
-OUTPUT FORMAT — Return ONLY valid JSON:
-================================================================================
-
-{
-  "persona_match": {
-    "type": "owner" | "marketing_leadership" | "growth_marketing" | "paid_media" | "sales_leadership" | "professional_services" | "unknown",
-    "decision_level": "ATL" | "BTL" | "unknown",
-    "confidence": 0.0-1.0,
-    "reasoning": "Brief explanation"
-  },
-  "triggers": [
-    {
-      "type": "hiring | leadership_change | funding | product_launch | expansion | partnership | tech_stack | market_shift | layoffs | compliance | site_visitor | thought_leadership",
-      "fact": "Concise factual statement from the research",
-      "source": "URL or source name (null if unavailable)",
-      "date": "YYYY-MM-DD (null if unavailable)",
-      "scores": {
-        "impact": 1-5,
-        "recency": 1-5,
-        "relevance": 1-5,
-        "total": sum
-      },
-      "content_excerpt": "Key quote if score >= 12 (optional, for thought_leadership)",
-      "full_content": "Full post if score >= 14 (optional, for thought_leadership)"
-    }
-  ],
-  "messaging_angles": [
-    {
-      "angle": "The messaging angle/approach",
-      "triggers_used": ["trigger type 1", "trigger type 2"],
-      "why_opening": "Why this creates an opening: [specific breakdown of timing and opportunity]"
-    }
-  ],
-  "relationship": {
-    "type": "direct_client" | "referral_partner" | "white_label" | "strategic_partner" | "unknown",
-    "reasoning": "Why this relationship type makes sense",
-    "who_they_serve": "Description of their clients (if applicable)",
-    "opening_question": "Suggested opening question for outreach"
-  },
-  "company_intel": {
-    "tech_stack": ["tool1", "tool2"],
-    "competitors": ["competitor1", "competitor2"],
-    "recent_news": ["news item 1"],
-    "growth_signals": ["signal 1"]
+  // Consolidated priority signals
+  prioritySignals: {
+    hasFundingTrigger: boolean
+    hasHiringTrigger: boolean
+    hasPainSignal: boolean
+    hasPersonVisibility: boolean
+    hasHighIntent: boolean
+    primaryPain: string | null
+    toneMatch: string | null
+    conversationHooks: string[]
   }
 }
 
-FINAL RULES:
-- Keep triggers factual - only include what you found in the research data
-- Keep angles concise - do NOT write full outbound messages
-- Stack rank everything by priority and impact
-- Return ONLY the JSON, no other text.`
+interface EnhancedRawResearchData extends RawResearchData {
+  linkedinPosts?: Array<{
+    text: string
+    date?: string
+    likes?: number
+    comments?: number
+  }>
+  intentData?: IntentData
+}
+
+/**
+ * Enhanced research function using new multi-query modules
+ * Runs parallel analysis for better signal extraction
+ */
+export async function conductEnhancedResearch(
+  lead: Lead,
+  rawData: EnhancedRawResearchData
+): Promise<EnhancedResearchResult> {
+  console.log(`[Agent 2] Starting ENHANCED research for: ${lead.email}`)
+
+  // Run enhanced analysis in parallel with base research
+  const [baseResult, perplexityEnhanced, linkedinEnhanced, intentScore] = await Promise.all([
+    // Base research (existing flow)
+    researchLead(lead, rawData),
+
+    // Enhanced Perplexity research (4 parallel queries)
+    researchCompany(
+      lead.company_name,
+      `${lead.first_name} ${lead.last_name}`,
+      lead.company_domain || undefined,
+      lead.company_industry || undefined
+    ).catch((err) => {
+      console.error('[Agent 2] Enhanced Perplexity research failed:', err)
+      return null
+    }),
+
+    // Enhanced LinkedIn analysis with pain detection (synchronous)
+    rawData.linkedinPosts && rawData.linkedinPosts.length > 0
+      ? Promise.resolve(analyzeLinkedInPostsEnhanced(rawData.linkedinPosts))
+      : Promise.resolve(null),
+
+    // Intent scoring (if intent data available)
+    rawData.intentData
+      ? Promise.resolve(scoreIntent(rawData.intentData))
+      : Promise.resolve(null),
+  ])
+
+  // Build priority signals from enhanced data
+  const prioritySignals = buildPrioritySignals(perplexityEnhanced, linkedinEnhanced, intentScore)
+
+  // Merge enhanced triggers into base result
+  const enhancedTriggers = mergeEnhancedTriggers(
+    baseResult.triggers,
+    perplexityEnhanced,
+    linkedinEnhanced
+  )
+
+  console.log(
+    `[Agent 2] Enhanced research complete - ${enhancedTriggers.length} triggers, ` +
+      `pain: ${prioritySignals.hasPainSignal}, intent: ${prioritySignals.hasHighIntent}`
+  )
+
+  return {
+    ...baseResult,
+    triggers: enhancedTriggers,
+    perplexityEnhanced,
+    linkedinEnhanced,
+    intentScore,
+    prioritySignals,
+  }
+}
+
+/**
+ * Build consolidated priority signals from all enhanced sources
+ */
+function buildPrioritySignals(
+  perplexity: PerplexityResearch | null,
+  linkedin: EnhancedLinkedInAnalysis | null,
+  intent: EnhancedIntentScore | null
+): EnhancedResearchResult['prioritySignals'] {
+  return {
+    hasFundingTrigger: perplexity?.triggers.recentFunding ?? false,
+    hasHiringTrigger: perplexity?.triggers.activelyHiring ?? false,
+    hasPainSignal: linkedin?.painIndicators?.some((p) => p.confidence === 'high') ?? false,
+    hasPersonVisibility: perplexity?.triggers.personInNews ?? false,
+    hasHighIntent: intent?.tier === 'hot',
+    primaryPain: linkedin?.painIndicators?.[0]?.text ?? null,
+    toneMatch: linkedin?.tone?.primary ?? null,
+    conversationHooks: linkedin?.conversationHooks?.map((h) => h.angle) ?? [],
+  }
+}
+
+/**
+ * Safely convert Date | string | null to ISO date string
+ */
+function toDateString(date: Date | string | null | undefined): string | null {
+  if (!date) return null
+  if (typeof date === 'string') {
+    // Already a string, extract just the date part if it's an ISO string
+    return date.includes('T') ? date.split('T')[0] : date
+  }
+  return date.toISOString().split('T')[0]
+}
+
+/**
+ * Merge enhanced triggers with base triggers, avoiding duplicates
+ */
+function mergeEnhancedTriggers(
+  baseTriggers: Trigger[],
+  perplexity: PerplexityResearch | null,
+  linkedin: EnhancedLinkedInAnalysis | null
+): Trigger[] {
+  const enhanced = [...baseTriggers]
+
+  // Add funding trigger from enhanced Perplexity
+  if (perplexity?.triggers.recentFunding && perplexity.funding.recency !== 'unknown') {
+    const existingFunding = enhanced.find((t) => t.type === 'funding')
+    if (!existingFunding) {
+      enhanced.push({
+        type: 'funding',
+        fact:
+          perplexity.funding.keyFindings[0] ||
+          `Recent funding activity (${perplexity.funding.recency})`,
+        source: 'Perplexity enhanced search',
+        date: toDateString(perplexity.funding.mostRecentDate),
+        scores: {
+          impact: perplexity.funding.recency === 'hot' ? 5 : 4,
+          recency: perplexity.funding.recency === 'hot' ? 5 : perplexity.funding.recency === 'warm' ? 4 : 3,
+          relevance: 4,
+          total: 0,
+        },
+      })
+      enhanced[enhanced.length - 1].scores.total =
+        enhanced[enhanced.length - 1].scores.impact +
+        enhanced[enhanced.length - 1].scores.recency +
+        enhanced[enhanced.length - 1].scores.relevance
+    }
+  }
+
+  // Add hiring trigger from enhanced Perplexity
+  if (perplexity?.triggers.activelyHiring && perplexity.hiring.recency !== 'unknown') {
+    const existingHiring = enhanced.find((t) => t.type === 'hiring')
+    if (!existingHiring) {
+      enhanced.push({
+        type: 'hiring',
+        fact:
+          perplexity.hiring.keyFindings[0] ||
+          `Actively hiring in marketing/growth (${perplexity.hiring.recency})`,
+        source: 'Perplexity enhanced search',
+        date: toDateString(perplexity.hiring.mostRecentDate),
+        scores: {
+          impact: 4,
+          recency: perplexity.hiring.recency === 'hot' ? 5 : 4,
+          relevance: 4,
+          total: 0,
+        },
+      })
+      enhanced[enhanced.length - 1].scores.total =
+        enhanced[enhanced.length - 1].scores.impact +
+        enhanced[enhanced.length - 1].scores.recency +
+        enhanced[enhanced.length - 1].scores.relevance
+    }
+  }
+
+  // Add thought leadership from enhanced Perplexity
+  if (perplexity?.triggers.personInNews) {
+    const existingTL = enhanced.find((t) => t.type === 'thought_leadership')
+    if (!existingTL && perplexity.personVisibility.keyFindings.length > 0) {
+      enhanced.push({
+        type: 'thought_leadership',
+        fact: perplexity.personVisibility.keyFindings[0],
+        source: 'Perplexity enhanced search',
+        date: toDateString(perplexity.personVisibility.mostRecentDate),
+        scores: {
+          impact: 4,
+          recency: perplexity.personVisibility.recency === 'hot' ? 5 : 4,
+          relevance: 5,
+          total: 0,
+        },
+        content_excerpt: perplexity.personVisibility.raw.slice(0, 300),
+      })
+      enhanced[enhanced.length - 1].scores.total =
+        enhanced[enhanced.length - 1].scores.impact +
+        enhanced[enhanced.length - 1].scores.recency +
+        enhanced[enhanced.length - 1].scores.relevance
+    }
+  }
+
+  // Add pain-based triggers from LinkedIn analysis
+  if (linkedin?.painIndicators && linkedin.painIndicators.length > 0) {
+    const highConfidencePains = linkedin.painIndicators.filter((p) => p.confidence === 'high')
+    for (const pain of highConfidencePains.slice(0, 2)) {
+      // Check if we already have a trigger about this pain
+      const alreadyExists = enhanced.some(
+        (t) => t.fact.toLowerCase().includes(pain.text.toLowerCase().slice(0, 30))
+      )
+      if (!alreadyExists) {
+        // Convert postDate to string if it's a Date
+        const dateStr = pain.postDate
+          ? typeof pain.postDate === 'string'
+            ? pain.postDate
+            : pain.postDate.toISOString().split('T')[0]
+          : null
+        enhanced.push({
+          type: 'market_shift', // Use market_shift as closest trigger type for pain
+          fact: `Pain signal detected: "${pain.text.slice(0, 150)}..."`,
+          source: 'LinkedIn post analysis',
+          date: dateStr,
+          scores: {
+            impact: 5, // Pain signals are high impact
+            recency: 4,
+            relevance: 5,
+            total: 14,
+          },
+        })
+      }
+    }
+  }
+
+  // Re-sort by total score
+  return enhanced.sort((a, b) => b.scores.total - a.scores.total)
 }

@@ -6,6 +6,10 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { supabase, type Lead } from '../lib/supabase'
 import type { ResearchResult, RelationshipType } from './agent2-research'
+import { loadPrompt } from '../lib/prompt-loader'
+import type { ContextProfile } from './context-profile-builder'
+import { getLearnedGuidelines } from '../lib/pattern-promoter'
+import { loadDynamicPrompt, recordPromptUsage, type PromptContext } from '../lib/prompt-manager'
 
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
@@ -25,6 +29,7 @@ export interface EmailSequence {
   }
   pain_1: PainPoint
   pain_2: PainPoint
+  sequence_strategy?: SequenceStrategy
   metadata: {
     persona_type: string
     top_trigger: string
@@ -48,9 +53,47 @@ export interface PainPoint {
   social_proof: string
 }
 
+export interface SequenceStrategy {
+  primaryAngle: string
+  personalizationUsed: string[]
+  toneUsed: 'formal' | 'conversational' | 'casual'
+  triggerLeveraged: string | null
+}
+
+// New format from 95/5 rule prompt
+interface NewFormatEmail {
+  emailNumber: number
+  day: number
+  subject: string
+  body: string
+  wordCount: number
+  internalNotes: string
+}
+
+interface NewFormatResponse {
+  sequence: NewFormatEmail[]
+  sequenceStrategy: SequenceStrategy
+  pain_1: PainPoint
+  pain_2: PainPoint
+}
+
 interface WriterInput {
   lead: Lead
   research: ResearchResult
+}
+
+interface ProfileWriterInput {
+  lead: Lead
+  contextProfile: ContextProfile
+  research: ResearchResult
+}
+
+interface RevisionWriterInput {
+  lead: Lead
+  contextProfile: ContextProfile
+  research: ResearchResult
+  revisionInstructions?: string
+  previousSequence?: Record<string, unknown>
 }
 
 /**
@@ -196,7 +239,503 @@ export async function writeSequence(input: WriterInput): Promise<EmailSequence> 
 }
 
 /**
- * Build the comprehensive writer prompt
+ * Enhanced writer function using context profile for better personalization
+ * Implements the 95/5 rule: 95% human touch, 5% soft positioning
+ */
+export async function writeSequenceWithProfile(input: ProfileWriterInput): Promise<EmailSequence> {
+  const { lead, contextProfile, research } = input
+
+  console.log(`[Agent 3] Writing 95/5 sequence with context profile for: ${lead.email}`)
+  console.log(`[Agent 3] Relationship type: ${research.relationship.type}`)
+  console.log(`[Agent 3] Profile quality score: ${contextProfile.metadata.dataQualityScore}`)
+
+  // Fetch RAG documents - messaging guidelines and anti-patterns
+  const { data: ragDocs, error: ragError } = await supabase
+    .from('rag_documents')
+    .select('content, rag_type, metadata')
+    .eq('tenant_id', lead.tenant_id)
+    .in('rag_type', ['messaging', 'shared'])
+
+  if (ragError) {
+    console.error('[Agent 3] Error fetching RAG documents:', ragError)
+  }
+
+  // Extract messaging guidelines from RAG
+  const messagingRag = ragDocs
+    ?.filter((d) => d.rag_type === 'messaging')
+    .map((d) => d.content)
+    .join('\n\n') || ''
+
+  // Extract anti-patterns (look for anti-patterns category or default list)
+  const antiPatterns = ragDocs
+    ?.filter((d) => d.metadata?.category === 'anti_patterns')
+    .map((d) => d.content)
+    .join('\n\n') || getDefaultAntiPatterns()
+
+  // Build the 95/5 writer prompt with dynamic loading (includes learned patterns via placeholder)
+  const { content: prompt, versionId: promptVersionId, abTestId } = await build955WriterPromptDynamic(
+    lead.tenant_id,
+    contextProfile,
+    messagingRag,
+    antiPatterns
+  )
+  console.log(`[Agent 3] Using prompt version: ${promptVersionId}${abTestId ? ` (A/B test: ${abTestId})` : ''}`)
+
+  // Call Claude with extended thinking for better reasoning
+  const message = await anthropic.messages.create({
+    model: 'claude-sonnet-4-20250514',
+    max_tokens: 16000,
+    thinking: {
+      type: 'enabled',
+      budget_tokens: 10000, // Increased for quality self-checking
+    },
+    messages: [
+      {
+        role: 'user',
+        content: prompt,
+      },
+    ],
+  })
+
+  // Parse response - filter out thinking blocks to get the text response
+  const textBlock = message.content.find(block => block.type === 'text')
+  const responseText = textBlock?.type === 'text' ? textBlock.text : ''
+
+  let parsed: NewFormatResponse
+  let result: EmailSequence
+
+  try {
+    // Strip markdown code blocks if present
+    let jsonText = responseText.trim()
+    if (jsonText.startsWith('```')) {
+      jsonText = jsonText.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '')
+    }
+    parsed = JSON.parse(jsonText) as NewFormatResponse
+
+    // Transform new format to EmailSequence format for backward compatibility
+    result = transformToEmailSequence(lead.id, research, contextProfile, parsed)
+  } catch (error) {
+    console.error('[Agent 3] Failed to parse 95/5 sequence response:', responseText.substring(0, 500))
+    throw new Error('Failed to parse email sequence from Claude response')
+  }
+
+  console.log(`[Agent 3] 95/5 Sequence generated - ${result.thread_1.emails.length + result.thread_2.emails.length} emails`)
+  console.log(`[Agent 3] Strategy: ${parsed.sequenceStrategy.primaryAngle}`)
+  console.log(`[Agent 3] Tone: ${parsed.sequenceStrategy.toneUsed}`)
+
+  // Save to email_sequences table with sequence_strategy and prompt version tracking
+  // Only include prompt_version_id if it's a valid UUID (not static fallback)
+  const isValidUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(promptVersionId)
+
+  const insertData: Record<string, unknown> = {
+    lead_id: lead.id,
+    tenant_id: lead.tenant_id,
+    relationship_type: result.relationship_type,
+    persona_type: result.metadata.persona_type,
+    top_trigger: result.metadata.top_trigger,
+    pain_1: result.pain_1,
+    pain_2: result.pain_2,
+    thread_1: result.thread_1,
+    thread_2: result.thread_2,
+    sequence_strategy: result.sequence_strategy,
+    status: 'pending',
+  }
+
+  // Only add prompt_version_id if it's a valid UUID reference
+  if (isValidUuid) {
+    insertData.prompt_version_id = promptVersionId
+  }
+
+  const { data: savedSequence, error: sequenceError } = await supabase
+    .from('email_sequences')
+    .insert(insertData)
+    .select('id')
+    .single()
+
+  if (sequenceError) {
+    console.error('[Agent 3] Error saving sequence:', sequenceError)
+    throw new Error(`Failed to save sequence: ${sequenceError.message}`)
+  }
+
+  console.log(`[Agent 3] Sequence saved with id: ${savedSequence.id}`)
+
+  // Record prompt usage for tracking and A/B test attribution
+  // Note: We'll link this to outreach_event when emails are deployed
+  // Only record if using dynamic prompts with valid UUID version
+  if (isValidUuid) {
+    try {
+      // Create a temporary outreach event ID for prompt tracking
+      // This will be updated when the sequence is deployed to Smartlead
+      const tempOutreachId = `sequence-${savedSequence.id}`
+      await recordPromptUsage(tempOutreachId, promptVersionId, abTestId)
+      console.log(`[Agent 3] Recorded prompt usage for version ${promptVersionId}`)
+    } catch (usageErr) {
+      console.error('[Agent 3] Error recording prompt usage:', usageErr)
+      // Don't throw - usage tracking is supplementary
+    }
+  }
+
+  // Save to lead_memories for history
+  const { error: memoryError } = await supabase.from('lead_memories').insert({
+    lead_id: lead.id,
+    tenant_id: lead.tenant_id,
+    source: 'agent3_writer',
+    memory_type: 'sequence_generated',
+    content: {
+      sequence_id: savedSequence.id,
+      relationship_type: result.relationship_type,
+      persona_type: result.metadata.persona_type,
+      pain_1_summary: result.pain_1.pain,
+      pain_2_summary: result.pain_2.pain,
+      thread_1_subject: result.thread_1.subject,
+      thread_2_subject: result.thread_2.subject,
+      email_count: result.thread_1.emails.length + result.thread_2.emails.length,
+      context_profile_quality: contextProfile.metadata.dataQualityScore,
+      sequence_strategy: result.sequence_strategy,
+    },
+    summary: `Generated ${result.thread_1.emails.length + result.thread_2.emails.length}-email 95/5 sequence: "${result.thread_1.subject}" + "${result.thread_2.subject}"`,
+  })
+
+  if (memoryError) {
+    console.error('[Agent 3] Error saving memory:', memoryError)
+    // Don't throw - memory is supplementary
+  }
+
+  return result
+}
+
+/**
+ * Writer function with revision instructions for failed reviews
+ * Called when Agent 4 requests specific changes to a sequence
+ */
+export async function writeSequenceWithRevisions(input: RevisionWriterInput): Promise<EmailSequence> {
+  const { lead, contextProfile, research, revisionInstructions, previousSequence } = input
+
+  console.log(`[Agent 3] Writing REVISED sequence for: ${lead.email}`)
+  console.log(`[Agent 3] Revision instructions provided: ${revisionInstructions ? 'Yes' : 'No'}`)
+
+  // Fetch RAG documents - messaging guidelines and anti-patterns
+  const { data: ragDocs, error: ragError } = await supabase
+    .from('rag_documents')
+    .select('content, rag_type, metadata')
+    .eq('tenant_id', lead.tenant_id)
+    .in('rag_type', ['messaging', 'shared'])
+
+  if (ragError) {
+    console.error('[Agent 3] Error fetching RAG documents:', ragError)
+  }
+
+  // Extract messaging guidelines from RAG
+  const messagingRag = ragDocs
+    ?.filter((d) => d.rag_type === 'messaging')
+    .map((d) => d.content)
+    .join('\n\n') || ''
+
+  // Extract anti-patterns
+  const antiPatterns = ragDocs
+    ?.filter((d) => d.metadata?.category === 'anti_patterns')
+    .map((d) => d.content)
+    .join('\n\n') || getDefaultAntiPatterns()
+
+  // Fetch learned patterns from the learning system
+  const learnedPatterns = await getLearnedGuidelines(lead.tenant_id)
+
+  // Build the prompt with revision instructions and learned patterns
+  const prompt = build955WriterPromptWithRevisions(
+    contextProfile,
+    messagingRag,
+    antiPatterns,
+    revisionInstructions,
+    previousSequence,
+    learnedPatterns
+  )
+
+  // Call Claude with extended thinking
+  const message = await anthropic.messages.create({
+    model: 'claude-sonnet-4-20250514',
+    max_tokens: 16000,
+    thinking: {
+      type: 'enabled',
+      budget_tokens: 12000, // Extra thinking budget for revisions
+    },
+    messages: [
+      {
+        role: 'user',
+        content: prompt,
+      },
+    ],
+  })
+
+  // Parse response
+  const textBlock = message.content.find(block => block.type === 'text')
+  const responseText = textBlock?.type === 'text' ? textBlock.text : ''
+
+  let parsed: NewFormatResponse
+  let result: EmailSequence
+
+  try {
+    let jsonText = responseText.trim()
+    if (jsonText.startsWith('```')) {
+      jsonText = jsonText.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '')
+    }
+    parsed = JSON.parse(jsonText) as NewFormatResponse
+
+    result = transformToEmailSequence(lead.id, research, contextProfile, parsed)
+  } catch (error) {
+    console.error('[Agent 3] Failed to parse revised sequence response:', responseText.substring(0, 500))
+    throw new Error('Failed to parse revised email sequence from Claude response')
+  }
+
+  console.log(`[Agent 3] Revised sequence generated - ${result.thread_1.emails.length + result.thread_2.emails.length} emails`)
+  console.log(`[Agent 3] Strategy: ${parsed.sequenceStrategy.primaryAngle}`)
+
+  // Note: We don't save to database here - the revision workflow handles the update
+
+  return result
+}
+
+/**
+ * Build the 95/5 writer prompt with revision instructions appended
+ */
+function build955WriterPromptWithRevisions(
+  profile: ContextProfile,
+  messagingRag: string,
+  antiPatterns: string,
+  revisionInstructions?: string,
+  previousSequence?: Record<string, unknown>,
+  learnedPatterns?: string
+): string {
+  // Start with the base prompt including learned patterns
+  let basePrompt = build955WriterPrompt(profile, messagingRag, antiPatterns, learnedPatterns)
+
+  // Append revision instructions if provided
+  if (revisionInstructions) {
+    const revisionSection = `
+
+================================================================================
+REVISION REQUIRED
+================================================================================
+
+A previous version of this sequence was reviewed and needs changes. Here are the specific revision instructions from the reviewer:
+
+${revisionInstructions}
+
+${previousSequence ? `
+Previous sequence that failed review:
+${JSON.stringify(previousSequence, null, 2).substring(0, 2000)}...
+` : ''}
+
+IMPORTANT:
+- Address ALL the issues mentioned above
+- Do not repeat the same mistakes
+- Pay special attention to any banned phrases that were flagged
+- Ensure personalization is specific and verifiable
+- Double-check word counts for each email
+`
+    basePrompt += revisionSection
+  }
+
+  return basePrompt
+}
+
+/**
+ * Build the 95/5 writer prompt with new template variables and learned patterns
+ * Uses dynamic prompt loading with version tracking when available
+ */
+async function build955WriterPromptDynamic(
+  tenantId: string,
+  profile: ContextProfile,
+  messagingRag: string,
+  antiPatterns: string
+): Promise<{ content: string; versionId: string; abTestId: string | null }> {
+  // Build context for dynamic section injection
+  const context: PromptContext = {
+    industry: profile.companyIntelligence.industry,
+    seniority: profile.leadSummary.seniorityLevel,
+    channel: 'email',
+  }
+
+  try {
+    const dynamicPrompt = await loadDynamicPrompt(
+      tenantId,
+      'agent3-writer',
+      {
+        contextProfile: JSON.stringify(profile, null, 2),
+        messagingRag: messagingRag || 'No specific messaging guidelines available.',
+        antiPatterns: antiPatterns,
+      },
+      context
+    )
+
+    return {
+      content: dynamicPrompt.content,
+      versionId: dynamicPrompt.versionId,
+      abTestId: dynamicPrompt.abTestId,
+    }
+  } catch (err) {
+    console.log('[Agent 3] Dynamic prompt loading failed, falling back to static:', err)
+    // Fallback to static prompt loading
+    const staticPrompt = build955WriterPromptStatic(profile, messagingRag, antiPatterns)
+    return {
+      content: staticPrompt,
+      versionId: `static-agent3-writer-${Date.now()}`,
+      abTestId: null,
+    }
+  }
+}
+
+/**
+ * Static fallback for prompt building (used when dynamic loading fails)
+ */
+function build955WriterPromptStatic(
+  profile: ContextProfile,
+  messagingRag: string,
+  antiPatterns: string,
+  learnedPatterns?: string
+): string {
+  const basePrompt = loadPrompt('agent3-writer', {
+    contextProfile: JSON.stringify(profile, null, 2),
+    messagingRag: messagingRag || 'No specific messaging guidelines available.',
+    antiPatterns: antiPatterns,
+  })
+
+  // Append learned patterns section if available
+  if (learnedPatterns && !learnedPatterns.includes('No learned patterns')) {
+    const learnedSection = `
+
+================================================================================
+LEARNED PATTERNS (Data-Driven Insights)
+================================================================================
+
+The following guidelines have been validated by our learning system based on actual
+performance data. These patterns are data-driven and should take precedence over
+generic best practices when they apply to this prospect's profile:
+
+${learnedPatterns}
+
+Apply these insights when relevant to the current prospect's context.
+`
+    return basePrompt + learnedSection
+  }
+
+  return basePrompt
+}
+
+/**
+ * Legacy static prompt builder - kept for backward compatibility
+ * @deprecated Use build955WriterPromptDynamic instead
+ */
+function build955WriterPrompt(
+  profile: ContextProfile,
+  messagingRag: string,
+  antiPatterns: string,
+  learnedPatterns?: string
+): string {
+  return build955WriterPromptStatic(profile, messagingRag, antiPatterns, learnedPatterns)
+}
+
+/**
+ * Transform new format response to EmailSequence for backward compatibility
+ */
+function transformToEmailSequence(
+  leadId: string,
+  research: ResearchResult,
+  profile: ContextProfile,
+  parsed: NewFormatResponse
+): EmailSequence {
+  // Split emails into two threads (emails 1-3 in thread 1, 4-7 in thread 2)
+  const thread1Emails = parsed.sequence.filter(e => e.emailNumber <= 3)
+  const thread2Emails = parsed.sequence.filter(e => e.emailNumber >= 4)
+
+  // Get subject from first email of each thread
+  const thread1Subject = thread1Emails[0]?.subject || 'Quick question'
+  const thread2Subject = thread2Emails[0]?.subject || 'Following up'
+
+  return {
+    lead_id: leadId,
+    relationship_type: research.relationship.type,
+    thread_1: {
+      subject: thread1Subject,
+      emails: thread1Emails.map(e => ({
+        email_number: e.emailNumber,
+        day: e.day,
+        structure: getEmailStructure(e.emailNumber),
+        subject: e.subject,
+        body: e.body,
+        word_count: e.wordCount,
+      })),
+    },
+    thread_2: {
+      subject: thread2Subject,
+      emails: thread2Emails.map(e => ({
+        email_number: e.emailNumber,
+        day: e.day,
+        structure: getEmailStructure(e.emailNumber),
+        subject: e.subject,
+        body: e.body,
+        word_count: e.wordCount,
+      })),
+    },
+    pain_1: parsed.pain_1,
+    pain_2: parsed.pain_2,
+    sequence_strategy: parsed.sequenceStrategy,
+    metadata: {
+      persona_type: research.persona_match.type,
+      top_trigger: parsed.sequenceStrategy.triggerLeveraged || research.triggers[0]?.fact || '',
+      generated_at: new Date().toISOString(),
+    },
+  }
+}
+
+/**
+ * Get email structure type based on email number (95/5 framework)
+ */
+function getEmailStructure(emailNumber: number): string {
+  const structures: Record<number, string> = {
+    1: 'pure_value',
+    2: 'trigger_connection',
+    3: 'insight_share',
+    4: 'pattern_interrupt',
+    5: 'case_study_teaser',
+    6: 'direct_value_offer',
+    7: 'graceful_close',
+  }
+  return structures[emailNumber] || 'unknown'
+}
+
+/**
+ * Default anti-patterns list if none found in RAG
+ */
+function getDefaultAntiPatterns(): string {
+  return `PHRASES TO NEVER USE:
+- "Hope this email finds you well"
+- "I wanted to reach out because..."
+- "We help companies like yours..."
+- "I'd love to pick your brain"
+- "Do you have 15 minutes?"
+- "I came across your profile and was impressed"
+- "Quick question" (as opening, not subject)
+- "Just following up"
+- "Per my last email"
+- "As per our conversation"
+- "I hope I'm not bothering you"
+- "Sorry to bother you"
+- "I know you're busy, but..."
+
+PATTERNS TO AVOID:
+- Starting with "Hi [Name]," on every email
+- Bullet points listing services
+- More than 2 paragraphs
+- Multiple CTAs in one email
+- Generic compliments without specific evidence
+- Fake familiarity ("I've been following your work")
+- Mentioning competitors
+- Desperate language or multiple follow-ups referencing silence`
+}
+
+/**
+ * Build the comprehensive writer prompt (legacy - for backward compatibility)
+ * @deprecated Use writeSequenceWithProfile with 95/5 prompt instead
  */
 function buildWriterPrompt(
   lead: Lead,
@@ -219,63 +758,9 @@ function buildWriterPrompt(
   // Determine framing based on relationship type
   const relationshipFraming = getRelationshipFraming(research.relationship.type)
 
-  return `You are writing cold outbound emails from a CEO/Founder to another business leader.
-
-Your job is to create a 7-step cold outbound email sequence using the T.I.P.S. framework.
-
-VOICE: These emails are from Jason, CEO of JSB Media — NOT an SDR. Write with the confidence and directness of a founder who has built something valuable and wants to help a peer.
-
-================================================================================
-CRITICAL: THE TRIGGER IS THE THROUGHLINE
-================================================================================
-
-The #1 trigger from the research should carry through the ENTIRE sequence — not just email 1.
-
-If they wrote an article, posted thought leadership, or have a strong signal:
-- Actually engage with the CONTENT of what they said
-- Reference specific points they made (not just "I saw your article")
-- Build the conversation around their ideas, their expertise, their world
-- Every email should feel like a continuation of that initial insight
-
-This is NOT about personalization tokens. It's about demonstrating you actually read and understood their work, and you're reaching out because you have something genuinely relevant to add to their world.
-
-Be HUMAN and NIMBLE. If the trigger is strong enough, let it guide the sequence more than the template. The framework is a guide, not a prison.
-
-=== RELATIONSHIP TYPE: ${research.relationship.type.toUpperCase()} ===
-${relationshipFraming}
-
-=== TARGET LEAD ===
-Name: ${lead.first_name} ${lead.last_name}
-Title: ${lead.job_title || 'Unknown'}
-Company: ${lead.company_name}
-Industry: ${lead.company_industry || 'Unknown'}
-
-=== PERSONA MATCH ===
-Type: ${research.persona_match.type}
-Decision Level: ${research.persona_match.decision_level}
-Reasoning: ${research.persona_match.reasoning}
-
-=== RESEARCH TRIGGERS (use these!) ===
-${triggersStr}
-
-=== MESSAGING ANGLES (suggested approaches) ===
-${anglesStr}
-
-=== RELATIONSHIP CONTEXT ===
-Who they serve: ${research.relationship.who_they_serve}
-Opening question: ${research.relationship.opening_question}
-Reasoning: ${research.relationship.reasoning}
-
-=== JSB MEDIA VALUE PROPOSITIONS ===
-${valueProps}
-
-=== CASE STUDIES / SOCIAL PROOF ===
-${caseStudies}
-
-=== PERSONA CONTEXT ===
-${personaContent}
-
-${lead.source === 'intent_data' ? `================================================================================
+  // Build intent data section if applicable
+  const intentDataSection = lead.source === 'intent_data'
+    ? `================================================================================
 INTENT DATA LEAD - SPECIAL INSTRUCTIONS
 ================================================================================
 
@@ -311,213 +796,31 @@ ADJUST YOUR APPROACH:
 - Emphasize identity resolution, cohesive strategy, and ROI clarity
 
 NEVER mention: website visit, site traffic, engagement with JSB content, "saw you checking us out"
-` : ''}================================================================================
-T.I.P.S. FRAMEWORK
-================================================================================
 
-**Trigger** - Use a relevant trigger from the research above. First line explains why you're reaching out.
-Vary wording: "Noticed...", "Saw...", "Looking at your posts about..."
+`
+    : ''
 
-**Implication** - Imply what's likely a priority based on the trigger.
-Vary wording: "Imagine you're...", "Guessing that means...", "That usually signals..."
-
-**Pain** - Identify pain points. Use Before-After-Bridge (BAB) formula with QUANTIFIED costs.
-BAB Format:
-- BEFORE: What's happening now (the struggle)
-- AFTER: What success looks like (the dream state)
-- BRIDGE: How to get there (JSB as the path)
-Example: "Most [titles] spend 15+ hours/week on content that doesn't convert. Imagine cutting that to 3 hours while 2x-ing inbound. That's what happens when you have a team that actually gets your market."
-Vary wording: "Most...", "A lot of [titles] deal with...", "The [industry] leaders I talk to..."
-
-**Social Proof** - ONLY use specific company names/case studies if DIRECTLY relevant to their industry.
-- If we have a case study in their exact space (legal, professional services, etc.) → use it
-- If NOT, use general language: "teams we work with", "what we hear from [similar titles]", "a pattern we see"
-- NEVER mention an irrelevant industry (don't tell a lawyer about an HVAC company)
-- General is better than irrelevant. Credibility comes from relevance, not name-dropping.
-
-**Solution** - Brief outcome + mechanism. Confident but not salesy.
-
-**Soft CTA** - Get a reply, not a meeting.
-Examples: "Worth a chat?", "Open to hearing more?", "Make sense to connect?"
-
-================================================================================
-SEQUENCE STRUCTURE
-================================================================================
-
-| Email | Day | Structure |
-|-------|-----|-----------|
-| Email 1 | Day 1 | T.I.P.S. full (Pain 1) + Subject Line |
-| Email 2 | Day 3 | Relevant article + value bump |
-| Email 3 | Day 5 | Thoughtful bump |
-| Email 4 | Day 12 | T.I.P.S. full (Pain 2) + NEW Subject Line |
-| Email 5 | Day 15 | Case study with real link |
-| Email 6 | Day 18 | Focus bump |
-| Email 7 | Day 21 | Referral bump |
-
-Thread 1: Emails 1, 2, 3 (same subject line)
-Thread 2: Emails 4, 5, 6, 7 (new subject line)
-
-================================================================================
-EMAIL STRUCTURES
-================================================================================
-
-**Email 1 (T.I.P.S. Full - Pain 1):**
-Hey [name]
-[Trigger - use research]
-[Implication based on trigger]
-[Pain with BAB and quantified cost]
-[Social proof with outcome]
-[Solution brief]
-[Soft CTA]
-
-**Email 2 (Relevant Article):**
-Hey [name], saw this and thought of you:
-[REAL URL to a relevant industry article - search for actual articles about their industry/challenge]
-[Brief 1-liner on why it's relevant to their situation]
-[Key insight or question it raised]
-Figured it'd be useful.
-P.S. Any thoughts on my last note?
-
-**Email 3 (Thoughtful Bump):**
-Hey [name]
-[Reference something SPECIFIC from their content - a point they made, a question they raised]
-Wanted to see if this resonated.
-[Optional: add a small insight related to their trigger]
-
-**Email 4 (T.I.P.S. Full - Pain 2):**
-[Same structure as Email 1 but different pain point]
-
-**Email 5 (Proof/Insight Bump):**
-Hey [name]
-Given [reference back to the trigger/their content], thought you'd find this relevant.
-[IF we have a directly relevant case study in their industry: share it with link]
-[IF NOT: share a general insight or pattern we see with similar companies/roles]
-Example without case study: "A lot of the [similar titles] we talk to are dealing with the same thing. The ones getting ahead are [insight]."
-Keep it tied to THEIR world, not ours.
-
-**Email 6 (Focus Bump):**
-Hey [name]
-[Circle back to their original content/trigger with a new angle or question]
-[Connect it to a priority they likely have]
-Is that something you're actively working on? Happy to share what's working for others in [their specific space].
-
-**Email 7 (Referral Bump):**
-Hey [name]
-[Acknowledge the trigger one more time - show you remember what they're focused on]
-If this isn't the right time, totally understand.
-Would it make sense to connect me with whoever handles [specific area from their trigger]?
-Either way — enjoyed reading your thoughts on [topic from trigger].
-
-================================================================================
-NON-NEGOTIABLE RULES
-================================================================================
-- 7 total emails
-- Each email <125 words
-- 3rd-5th grade reading level
-- Direct and confident tone (CEO to CEO) — no hedge words like "just", "maybe", "I think"
-- Short lines with white space
-- NO emojis, NO bolding, NO italics
-- Subject lines: 2-3 words, no punctuation, no adjectives
-- Soft CTAs only (never ask for time/meeting directly)
-- Speak like a founder helping another founder, not a marketer or SDR
-
-================================================================================
-PAIN SELECTION
-================================================================================
-Based on the research triggers and relationship type, select TWO pain points:
-
-Pain 1 (Emails 1-3): Should tie to the TOP trigger from research
-Pain 2 (Emails 4-7): Should tie to a SECONDARY angle or trigger
-
-For each pain, define:
-- pain: The specific problem (tied to their trigger/content)
-- implication: Quantified cost of inaction (use BAB formula)
-- solution: How JSB helps (brief)
-- social_proof: ONLY if we have a relevant case study for their industry. Otherwise use general: "teams we work with in [their space]", "what we hear from [similar titles]", etc.
-
-================================================================================
-OUTPUT FORMAT — Return ONLY valid JSON:
-================================================================================
-
-{
-  "pain_1": {
-    "pain": "The specific pain point",
-    "implication": "Quantified cost/impact",
-    "solution": "How JSB helps",
-    "social_proof": "Company + outcome"
-  },
-  "pain_2": {
-    "pain": "Second pain point",
-    "implication": "Quantified cost/impact",
-    "solution": "How JSB helps",
-    "social_proof": "Company + outcome"
-  },
-  "thread_1": {
-    "subject": "Two Words",
-    "emails": [
-      {
-        "email_number": 1,
-        "day": 1,
-        "structure": "tips_full",
-        "body": "The full email text...",
-        "word_count": 95
-      },
-      {
-        "email_number": 2,
-        "day": 3,
-        "structure": "resource_bump",
-        "body": "The full email text...",
-        "word_count": 85
-      },
-      {
-        "email_number": 3,
-        "day": 5,
-        "structure": "thoughtful_bump",
-        "body": "The full email text...",
-        "word_count": 40
-      }
-    ]
-  },
-  "thread_2": {
-    "subject": "Two Words",
-    "emails": [
-      {
-        "email_number": 4,
-        "day": 12,
-        "structure": "tips_full",
-        "body": "The full email text...",
-        "word_count": 98
-      },
-      {
-        "email_number": 5,
-        "day": 15,
-        "structure": "case_study_bump",
-        "body": "The full email text...",
-        "word_count": 60
-      },
-      {
-        "email_number": 6,
-        "day": 18,
-        "structure": "focus_bump",
-        "body": "The full email text...",
-        "word_count": 45
-      },
-      {
-        "email_number": 7,
-        "day": 21,
-        "structure": "referral_bump",
-        "body": "The full email text...",
-        "word_count": 35
-      }
-    ]
-  }
-}
-
-FINAL REMINDER:
-- Use the ACTUAL triggers from the research
-- Personalize with their name, company, and specific observations
-- Keep it conversational and peer-to-peer
-- Return ONLY valid JSON, no other text`
+  return loadPrompt('agent3-writer-legacy', {
+    relationshipType: research.relationship.type.toUpperCase(),
+    relationshipFraming,
+    firstName: lead.first_name,
+    lastName: lead.last_name,
+    jobTitle: lead.job_title || 'Unknown',
+    companyName: lead.company_name,
+    companyIndustry: lead.company_industry || 'Unknown',
+    personaType: research.persona_match.type,
+    decisionLevel: research.persona_match.decision_level,
+    personaReasoning: research.persona_match.reasoning,
+    triggersStr,
+    anglesStr,
+    whoTheyServe: research.relationship.who_they_serve,
+    openingQuestion: research.relationship.opening_question,
+    relationshipReasoning: research.relationship.reasoning,
+    valueProps,
+    caseStudies,
+    personaContent,
+    intentDataSection,
+  })
 }
 
 /**
