@@ -13,6 +13,7 @@ import {
   createTemplateCampaign,
   getCampaigns,
 } from '../src/lib/smartlead'
+import { trackSequenceDeployment } from '../src/lib/learning-tracker'
 
 // Default campaign ID - set this after creating the template campaign
 const DEFAULT_CAMPAIGN_ID = process.env.SMARTLEAD_CAMPAIGN_ID
@@ -141,6 +142,30 @@ export const smartleadDeployment = inngest.createFunction(
           updated_at: new Date().toISOString(),
         })
         .eq('id', sequence.id)
+    })
+
+    // Step 6b: Track outreach events for learning system
+    await step.run('track-outreach-events', async () => {
+      const thread1 = sequence.thread_1 as { subject: string; emails: Array<{ body: string }> }
+      const thread2 = sequence.thread_2 as { subject: string; emails: Array<{ body: string }> }
+
+      await trackSequenceDeployment({
+        tenantId: lead.tenant_id,
+        leadId: lead.id,
+        sequenceId: sequence.id,
+        smartleadCampaignId: campaignId.toString(),
+        smartleadLeadId: smartleadResult.id?.toString() || '',
+        personaType: eventData.persona_type,
+        relationshipType: eventData.relationship_type,
+        topTriggerType: sequence.top_trigger || undefined,
+        sequenceStrategy: sequence.sequence_strategy as Record<string, unknown> | undefined,
+        threads: [
+          { threadNumber: 1, subject: thread1.subject, emails: thread1.emails },
+          { threadNumber: 2, subject: thread2.subject, emails: thread2.emails },
+        ],
+      })
+
+      console.log(`[Workflow 4] Outreach events tracked for learning system`)
     })
 
     // Step 7: Update lead status

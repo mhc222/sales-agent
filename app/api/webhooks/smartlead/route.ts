@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '../../../../src/lib/supabase'
 import { inngest } from '../../../../inngest/client'
+import {
+  trackEngagementEvent,
+  findOutreachEventBySmartlead,
+  getDaysSinceFirstEmail,
+} from '../../../../src/lib/learning-tracker'
 
 /**
  * Smartlead Webhook Handler
@@ -173,6 +178,23 @@ async function handleEmailOpen(
     })
   }
 
+  // Track in learning system
+  if (payload.campaign_id && payload.lead_id) {
+    const outreachEvent = await findOutreachEventBySmartlead(payload.campaign_id, payload.lead_id)
+    if (outreachEvent) {
+      await trackEngagementEvent({
+        tenantId,
+        outreachEventId: outreachEvent.id,
+        leadId: outreachEvent.leadId,
+        eventType: 'open',
+        eventSource: 'smartlead',
+        rawPayload: payload as Record<string, unknown>,
+        attributedToEmailPosition: outreachEvent.emailPosition,
+        daysSinceFirstEmail: lead ? await getDaysSinceFirstEmail(lead.id) : 0,
+      })
+    }
+  }
+
   console.log(`[Smartlead Webhook] Open tracked: ${payload.email}`)
 }
 
@@ -220,6 +242,23 @@ async function handleEmailClick(
     })
   }
 
+  // Track in learning system
+  if (payload.campaign_id && payload.lead_id) {
+    const outreachEvent = await findOutreachEventBySmartlead(payload.campaign_id, payload.lead_id)
+    if (outreachEvent) {
+      await trackEngagementEvent({
+        tenantId,
+        outreachEventId: outreachEvent.id,
+        leadId: outreachEvent.leadId,
+        eventType: 'click',
+        eventSource: 'smartlead',
+        rawPayload: payload as Record<string, unknown>,
+        attributedToEmailPosition: outreachEvent.emailPosition,
+        daysSinceFirstEmail: lead ? await getDaysSinceFirstEmail(lead.id) : 0,
+      })
+    }
+  }
+
   console.log(`[Smartlead Webhook] Click tracked: ${payload.email}`)
 }
 
@@ -260,6 +299,26 @@ async function handleEmailReply(
       .eq('id', lead.id)
   }
 
+  // Track in learning system (initial reply - sentiment TBD by classification)
+  let outreachEventId: string | undefined
+  if (payload.campaign_id && payload.lead_id) {
+    const outreachEvent = await findOutreachEventBySmartlead(payload.campaign_id, payload.lead_id)
+    if (outreachEvent) {
+      outreachEventId = outreachEvent.id
+      await trackEngagementEvent({
+        tenantId,
+        outreachEventId: outreachEvent.id,
+        leadId: outreachEvent.leadId,
+        eventType: 'reply',
+        eventSource: 'smartlead',
+        replyText: payload.reply_text,
+        rawPayload: payload as Record<string, unknown>,
+        attributedToEmailPosition: outreachEvent.emailPosition,
+        daysSinceFirstEmail: lead ? await getDaysSinceFirstEmail(lead.id) : 0,
+      })
+    }
+  }
+
   // Emit event for classification workflow
   await inngest.send({
     name: 'smartlead.email.replied',
@@ -273,6 +332,7 @@ async function handleEmailReply(
       campaign_id: payload.campaign_id,
       lead_name: lead ? `${lead.first_name} ${lead.last_name}` : undefined,
       company_name: lead?.company_name,
+      outreach_event_id: outreachEventId, // Pass for learning system update after classification
     },
   })
 
@@ -337,6 +397,22 @@ async function handleEmailBounce(
         campaign_id: payload.campaign_id,
       },
     })
+  }
+
+  // Track in learning system
+  if (payload.campaign_id && payload.lead_id) {
+    const outreachEvent = await findOutreachEventBySmartlead(payload.campaign_id, payload.lead_id)
+    if (outreachEvent) {
+      await trackEngagementEvent({
+        tenantId,
+        outreachEventId: outreachEvent.id,
+        leadId: outreachEvent.leadId,
+        eventType: 'bounce',
+        eventSource: 'smartlead',
+        rawPayload: payload as Record<string, unknown>,
+        attributedToEmailPosition: outreachEvent.emailPosition,
+      })
+    }
   }
 
   // Emit bounce event for any additional handling
@@ -410,6 +486,22 @@ async function handleUnsubscribe(
       event_type: 'email.unsubscribed',
       metadata: { campaign_id: payload.campaign_id },
     })
+  }
+
+  // Track in learning system
+  if (payload.campaign_id && payload.lead_id) {
+    const outreachEvent = await findOutreachEventBySmartlead(payload.campaign_id, payload.lead_id)
+    if (outreachEvent) {
+      await trackEngagementEvent({
+        tenantId,
+        outreachEventId: outreachEvent.id,
+        leadId: outreachEvent.leadId,
+        eventType: 'unsubscribe',
+        eventSource: 'smartlead',
+        rawPayload: payload as Record<string, unknown>,
+        attributedToEmailPosition: outreachEvent.emailPosition,
+      })
+    }
   }
 
   // Emit event for GHL sync

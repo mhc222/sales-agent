@@ -212,4 +212,28 @@ export interface Events {
       interest_signals: string[]
     }
   }
+  // Sequence revision events
+  'lead.sequence-revision-needed': {
+    data: {
+      lead_id: string
+      tenant_id: string
+      sequence_id: string
+      revision_instructions: string | null
+      attempt: number
+    }
+  }
+  'lead.sequence-revision-complete': {
+    data: {
+      lead_id: string
+      tenant_id: string
+      sequence_id: string
+      attempt: number
+    }
+  }
+  // Learning system events
+  'learning.analyze-requested': {
+    data: {
+      tenant_id: string
+    }
+  }
 }

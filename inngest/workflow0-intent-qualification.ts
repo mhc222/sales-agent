@@ -1,5 +1,6 @@
 import { inngest } from './client'
 import { supabase, type Lead } from '../src/lib/supabase'
+import { normalizeLead, type NormalizedLead } from '../src/lib/data-normalizer'
 
 /**
  * Workflow 0: Intent Data Qualification
@@ -62,6 +63,10 @@ export const intentQualification = inngest.createFunction(
     const now = new Date().toISOString()
 
     console.log(`[Intent Workflow] Processing: ${eventData.email} (score: ${eventData.intent_score}, rank: ${eventData.batch_rank})`)
+
+    // Normalize incoming data at the start
+    const normalizedData = normalizeLead(eventData as Record<string, unknown>, 'intent')
+    console.log(`[Intent Workflow] Data normalized from intent source`)
 
     // Step 1: Check if lead already exists by email
     const existingLead = await step.run('check-existing-lead', async () => {

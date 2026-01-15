@@ -1,6 +1,7 @@
 import { inngest } from './client'
-import { qualifyLead } from '../src/agents/agent1-qualification'
+import { qualifyNormalizedLead, type ExistingRecords } from '../src/agents/agent1-qualification'
 import { supabase, type Lead } from '../src/lib/supabase'
+import { normalizeLead, type NormalizedLead } from '../src/lib/data-normalizer'
 
 interface LeadIngestedEvent {
   data: {
@@ -36,6 +37,10 @@ export const qualificationAndResearch = inngest.createFunction(
     const now = new Date().toISOString()
 
     console.log(`[Workflow 1] Starting qualification for: ${eventData.email}`)
+
+    // Normalize incoming data at the start
+    const normalizedData = normalizeLead(eventData as Record<string, unknown>, 'pixel')
+    console.log(`[Workflow 1] Data normalized from pixel source`)
 
     // Step 1: Check if lead already exists by email
     const existingLead = await step.run('check-existing-lead', async () => {
@@ -323,9 +328,14 @@ export const qualificationAndResearch = inngest.createFunction(
       }
     }
 
-    // First visit: Run Agent 1 - Qualification
+    // First visit: Run Agent 1 - Qualification with normalized data
     const qualification = await step.run('agent1-qualify', async () => {
-      return await qualifyLead(lead, existingRecords)
+      // Update normalized data with current visit count
+      const normalizedWithVisitCount: NormalizedLead = {
+        ...normalizedData,
+        visitCount: lead.visit_count || 1,
+      }
+      return await qualifyNormalizedLead(normalizedWithVisitCount, existingRecords as ExistingRecords)
     })
 
     console.log(`[Workflow 1] Qualification decision: ${qualification.decision} (confidence: ${qualification.confidence})`)

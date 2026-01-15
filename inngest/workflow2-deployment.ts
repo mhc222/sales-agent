@@ -14,13 +14,15 @@ import {
   scrapeLinkedInProfile,
   scrapeLinkedInCompany,
 } from '../src/lib/apify'
+// Enhanced research modules
+import { researchCompany, type PerplexityResearch } from '../src/lib/perplexity'
 import {
-  searchTriggers,
-  searchIntentTriggers,
-  searchPerson,
-  combineSearchResults,
-} from '../src/lib/perplexity'
-import { analyzeLinkedInPosts, combineTriggers } from '../src/lib/linkedin-analyzer'
+  analyzeLinkedInPostsEnhanced,
+  type EnhancedLinkedInAnalysis,
+  type PainSignal,
+  type ConversationHook,
+} from '../src/lib/linkedin-analyzer'
+import { scoreIntent, type EnhancedIntentScore, type IntentData } from '../src/lib/intent-scorer'
 import { researchLead, type ResearchResult } from '../src/agents/agent2-research'
 
 interface ReadyForDeploymentEvent {
@@ -87,15 +89,47 @@ export const researchPipeline = inngest.createFunction(
       }
     }
 
-    // Initialize collection variables
+    // Initialize collection variables (enhanced)
     let linkedinProfile: Record<string, unknown> | null = null
     let linkedinCompany: Record<string, unknown> | null = null
-    let perplexityResults: { content: string; citations: string[]; query: string } | null = null
+    let personalLinkedInAnalysis: EnhancedLinkedInAnalysis | null = null
+    let companyLinkedInAnalysis: EnhancedLinkedInAnalysis | null = null
+    let perplexityResearch: PerplexityResearch | null = null
     let hasSufficientTriggers = false
-    const allAnalyses: Array<{ has_sufficient_triggers: boolean; trigger_count: number; triggers_found: Array<{ type: string; fact: string; recency: 'last_month' | 'last_3_months' | 'last_6_months' | 'last_12_months' | 'older'; relevance_score: number }>; reasoning: string }> = []
 
     // ========================================
-    // WATERFALL STEP 1: Personal LinkedIn
+    // STEP 0: Score Intent (free, local computation)
+    // ========================================
+    const intentScore = await step.run('score-intent', async () => {
+      // Build intent data from lead's visit history
+      const intentSignal = (lead.intent_signal || {}) as Record<string, unknown>
+      const pagesVisited = (intentSignal.pages_visited || []) as Array<{ page: string; url?: string }>
+
+      const intentData: IntentData = {
+        companyDomain: lead.company_domain || '',
+        companyName: lead.company_name,
+        pageViews: pagesVisited.map((p) => ({
+          page: typeof p === 'string' ? p : p.page || p.url || '',
+          url: typeof p === 'object' ? p.url : undefined,
+        })),
+        totalVisits: lead.visit_count || 1,
+        firstSeen: lead.first_seen_at || undefined,
+        lastSeen: lead.last_seen_at || undefined,
+        industry: lead.company_industry || undefined,
+      }
+
+      const scored = scoreIntent(intentData)
+
+      console.log(`[Intent] ${lead.email}: Score ${scored.score} (${scored.tier})`)
+      console.log(`  - Top pages: ${scored.topPages.slice(0, 3).join(', ') || 'none'}`)
+      console.log(`  - Matched sequences: ${scored.matchedSequences.join(', ') || 'none'}`)
+      console.log(`  - Urgency: ${scored.urgency}`)
+
+      return scored
+    })
+
+    // ========================================
+    // WATERFALL STEP 1: Personal LinkedIn (Enhanced)
     // ========================================
     if (lead.linkedin_url) {
       linkedinProfile = await step.run('waterfall-1-personal-linkedin', async () => {
@@ -105,21 +139,40 @@ export const researchPipeline = inngest.createFunction(
       })
 
       if (linkedinProfile) {
-        const personalAnalysis = await step.run('waterfall-1-analyze', async () => {
-          console.log(`[Waterfall] Step 1: Analyzing personal LinkedIn posts...`)
-          return await analyzeLinkedInPosts(
-            linkedinProfile,
-            `${lead.first_name} ${lead.last_name}`,
-            lead.company_name,
-            false
-          )
+        personalLinkedInAnalysis = await step.run('waterfall-1-analyze-enhanced', async () => {
+          console.log(`[Waterfall] Step 1: Analyzing personal LinkedIn posts (enhanced)...`)
+
+          // Extract posts array from profile data
+          const posts = (linkedinProfile?.posts || []) as Array<{
+            text: string
+            date?: string
+            likes?: number
+            comments?: number
+          }>
+
+          if (posts.length === 0) {
+            console.log(`[Waterfall] Step 1: No posts found in profile data`)
+            return null
+          }
+
+          return analyzeLinkedInPostsEnhanced(posts)
         })
 
-        allAnalyses.push(personalAnalysis)
-        hasSufficientTriggers = personalAnalysis.has_sufficient_triggers
+        if (personalLinkedInAnalysis) {
+          // Enhanced sufficiency check - pain signals are gold
+          hasSufficientTriggers =
+            personalLinkedInAnalysis.hasPainSignals ||
+            (personalLinkedInAnalysis.recentTopics.length >= 2 && personalLinkedInAnalysis.isActiveUser) ||
+            personalLinkedInAnalysis.conversationHooks.length >= 2
 
-        console.log(`[Waterfall] Step 1 Result: ${personalAnalysis.trigger_count} triggers found, sufficient: ${hasSufficientTriggers}`)
-        console.log(`[Waterfall] Reasoning: ${personalAnalysis.reasoning}`)
+          console.log(`[Waterfall] Step 1 Result:`)
+          console.log(`  - Pain signals: ${personalLinkedInAnalysis.painIndicators.length} (sufficient: ${personalLinkedInAnalysis.hasPainSignals})`)
+          console.log(`  - Tone: ${personalLinkedInAnalysis.tone.primary}`)
+          console.log(`  - Conversation hooks: ${personalLinkedInAnalysis.conversationHooks.length}`)
+          console.log(`  - Sufficient triggers: ${hasSufficientTriggers}`)
+        } else {
+          console.log(`[Waterfall] Step 1: Enhanced analysis returned null`)
+        }
       } else {
         console.log(`[Waterfall] Step 1: Personal LinkedIn scrape returned no data, moving to next step`)
       }
@@ -128,7 +181,7 @@ export const researchPipeline = inngest.createFunction(
     }
 
     // ========================================
-    // WATERFALL STEP 2: Company LinkedIn (if needed)
+    // WATERFALL STEP 2: Company LinkedIn (if needed, Enhanced)
     // ========================================
     if (!hasSufficientTriggers && lead.company_linkedin_url) {
       linkedinCompany = await step.run('waterfall-2-company-linkedin', async () => {
@@ -138,24 +191,47 @@ export const researchPipeline = inngest.createFunction(
       })
 
       if (linkedinCompany) {
-        const companyAnalysis = await step.run('waterfall-2-analyze', async () => {
-          console.log(`[Waterfall] Step 2: Analyzing company LinkedIn posts...`)
-          return await analyzeLinkedInPosts(
-            linkedinCompany,
-            `${lead.first_name} ${lead.last_name}`,
-            lead.company_name,
-            true
-          )
+        companyLinkedInAnalysis = await step.run('waterfall-2-analyze-enhanced', async () => {
+          console.log(`[Waterfall] Step 2: Analyzing company LinkedIn posts (enhanced)...`)
+
+          // Extract posts array from company data
+          const posts = (linkedinCompany?.posts || []) as Array<{
+            text: string
+            date?: string
+            likes?: number
+            comments?: number
+          }>
+
+          if (posts.length === 0) {
+            console.log(`[Waterfall] Step 2: No posts found in company data`)
+            return null
+          }
+
+          return analyzeLinkedInPostsEnhanced(posts)
         })
 
-        allAnalyses.push(companyAnalysis)
+        if (companyLinkedInAnalysis) {
+          // Check combined pain signals from both personal and company
+          const totalPainSignals =
+            (personalLinkedInAnalysis?.painIndicators.length || 0) +
+            (companyLinkedInAnalysis?.painIndicators.length || 0)
+          const totalHooks =
+            (personalLinkedInAnalysis?.conversationHooks.length || 0) +
+            (companyLinkedInAnalysis?.conversationHooks.length || 0)
 
-        // Check combined triggers
-        const combinedTriggers = combineTriggers(allAnalyses)
-        const highValueTriggers = combinedTriggers.filter(t => t.relevance_score >= 4)
-        hasSufficientTriggers = highValueTriggers.length >= 2 || combinedTriggers.length >= 3
+          hasSufficientTriggers =
+            totalPainSignals >= 1 || // Any pain signal is valuable
+            totalHooks >= 2 ||
+            companyLinkedInAnalysis.hasPainSignals
 
-        console.log(`[Waterfall] Step 2 Result: ${companyAnalysis.trigger_count} new triggers, total high-value: ${highValueTriggers.length}, sufficient: ${hasSufficientTriggers}`)
+          console.log(`[Waterfall] Step 2 Result:`)
+          console.log(`  - Company pain signals: ${companyLinkedInAnalysis.painIndicators.length}`)
+          console.log(`  - Total pain signals: ${totalPainSignals}`)
+          console.log(`  - Total hooks: ${totalHooks}`)
+          console.log(`  - Sufficient triggers: ${hasSufficientTriggers}`)
+        } else {
+          console.log(`[Waterfall] Step 2: Enhanced analysis returned null`)
+        }
       } else {
         console.log(`[Waterfall] Step 2: Company LinkedIn scrape returned no data, moving to next step`)
       }
@@ -166,74 +242,133 @@ export const researchPipeline = inngest.createFunction(
     }
 
     // ========================================
-    // WATERFALL STEP 3: Perplexity (if needed)
+    // WATERFALL STEP 3: Perplexity (if needed, Enhanced with 4 parallel queries)
     // ========================================
     if (!hasSufficientTriggers) {
-      perplexityResults = await step.run('waterfall-3-perplexity', async () => {
-        console.log(`[Waterfall] Step 3: Running Perplexity web search...`)
+      perplexityResearch = await step.run('waterfall-3-perplexity-enhanced', async () => {
+        console.log(`[Waterfall] Step 3: Running enhanced Perplexity research (4 parallel queries)...`)
 
-        // Use intent-specific search for intent data leads
-        const isIntentLead = lead.source === 'intent_data'
-        console.log(`[Waterfall] Lead source: ${lead.source || 'pixel'}, using ${isIntentLead ? 'intent' : 'standard'} search`)
-
-        const triggerSearch = isIntentLead
-          ? await searchIntentTriggers(
-              lead.company_name,
-              lead.company_domain || undefined,
-              lead.company_industry || undefined
-            )
-          : await searchTriggers(
-              lead.company_name,
-              lead.company_domain || undefined
-            )
-
-        const personSearch = await searchPerson(
-          `${lead.first_name} ${lead.last_name}`,
+        const research = await researchCompany(
           lead.company_name,
-          lead.job_title || undefined
+          `${lead.first_name} ${lead.last_name}`,
+          lead.company_domain || undefined,
+          lead.company_industry || undefined
         )
 
-        const { combinedContent, allCitations } = combineSearchResults([
-          triggerSearch,
-          personSearch,
-        ])
+        console.log(`[Perplexity] ${lead.company_name}:`)
+        console.log(`  - Funding: ${research.funding.recency} (${research.triggers.recentFunding ? 'TRIGGER' : 'no trigger'})`)
+        console.log(`  - Hiring: ${research.hiring.recency} (${research.triggers.activelyHiring ? 'TRIGGER' : 'no trigger'})`)
+        console.log(`  - Pain signals: ${research.pain.keyFindings.length} findings`)
+        console.log(`  - Person visibility: ${research.personVisibility.recency} (${research.triggers.personInNews ? 'TRIGGER' : 'no trigger'})`)
 
-        if (!combinedContent) {
-          console.log(`[Waterfall] Step 3: No Perplexity results`)
-          return null
-        }
-
-        return {
-          content: combinedContent,
-          citations: allCitations,
-          query: `${lead.company_name} + ${lead.first_name} ${lead.last_name}`,
-        }
+        return research
       })
 
-      console.log(`[Waterfall] Step 3 Result: Perplexity ${perplexityResults ? 'found data' : 'no data'}`)
+      console.log(`[Waterfall] Step 3 Result: Perplexity research complete`)
     } else {
       console.log(`[Waterfall] Step 3: Skipping Perplexity - already have sufficient triggers`)
     }
 
     // ========================================
-    // DATA COLLECTION SUMMARY
+    // BUILD ENHANCED RESEARCH CONTEXT
     // ========================================
-    console.log(`[Workflow 2] Data collection complete:`)
-    console.log(`  - LinkedIn Profile: ${linkedinProfile ? 'Yes' : 'No'}`)
-    console.log(`  - LinkedIn Company: ${linkedinCompany ? 'Yes' : 'No'}`)
-    console.log(`  - Perplexity: ${perplexityResults ? 'Yes' : 'No'}`)
-    console.log(`  - Pre-analyzed triggers: ${allAnalyses.reduce((sum, a) => sum + a.trigger_count, 0)}`)
+    // Combine all pain signals from LinkedIn
+    const allPainSignals: PainSignal[] = [
+      ...(personalLinkedInAnalysis?.painIndicators || []),
+      ...(companyLinkedInAnalysis?.painIndicators || []),
+    ]
+
+    // Find best conversation hook
+    const bestHook: ConversationHook | null =
+      personalLinkedInAnalysis?.bestHook ||
+      companyLinkedInAnalysis?.bestHook ||
+      null
+
+    // Build composite triggers object
+    const compositeTriggers = {
+      // From intent scoring
+      highIntent: intentScore.tier === 'hot',
+      warmIntent: intentScore.tier === 'warm',
+      viewedPricing: intentScore.topPages.includes('pricing'),
+      viewedServices: intentScore.topPages.includes('services'),
+      buyerJourneyAdvanced: intentScore.matchedSequences.length > 0,
+
+      // From Perplexity (with recency!)
+      recentFunding: perplexityResearch?.triggers.recentFunding || false,
+      activelyHiring: perplexityResearch?.triggers.activelyHiring || false,
+      competitivePressure: perplexityResearch?.triggers.competitivePressure || false,
+      personInNews: perplexityResearch?.triggers.personInNews || false,
+
+      // From LinkedIn
+      hasPainSignals: allPainSignals.length > 0,
+      hasHighConfidencePain: allPainSignals.some((p) => p.confidence === 'high'),
+      isActiveOnLinkedIn: personalLinkedInAnalysis?.isActiveUser || false,
+      hasConversationHooks: (personalLinkedInAnalysis?.conversationHooks.length || 0) > 0,
+    }
+
+    // Determine outreach guidance
+    const outreachGuidance = {
+      urgency:
+        intentScore.tier === 'hot' ||
+        perplexityResearch?.triggers.recentFunding ||
+        perplexityResearch?.triggers.activelyHiring
+          ? ('high' as const)
+          : intentScore.tier === 'warm' || allPainSignals.length > 0
+            ? ('medium' as const)
+            : ('low' as const),
+      tone: personalLinkedInAnalysis?.tone?.primary || 'formal',
+      personalizationHooks: [
+        bestHook?.angle,
+        perplexityResearch?.personVisibility.keyFindings[0],
+        ...allPainSignals.slice(0, 2).map((p) => `Reference their pain: "${p.topic}"`),
+      ]
+        .filter(Boolean)
+        .slice(0, 3) as string[],
+    }
 
     // ========================================
-    // FINAL SYNTHESIS: Research Analyst
+    // DATA COLLECTION SUMMARY (Enhanced)
+    // ========================================
+    console.log(`[Workflow 2] Data collection complete:`)
+    console.log(`  - Intent Score: ${intentScore.score} (${intentScore.tier})`)
+    console.log(`  - LinkedIn Profile: ${linkedinProfile ? 'Yes' : 'No'}`)
+    console.log(`  - LinkedIn Company: ${linkedinCompany ? 'Yes' : 'No'}`)
+    console.log(`  - Perplexity Research: ${perplexityResearch ? 'Yes' : 'No'}`)
+    console.log(`  - Pain Signals: ${allPainSignals.length}`)
+    console.log(`  - Active Triggers: ${Object.entries(compositeTriggers).filter(([_, v]) => v).map(([k]) => k).join(', ')}`)
+    console.log(`  - Outreach Urgency: ${outreachGuidance.urgency}`)
+
+    // ========================================
+    // FINAL SYNTHESIS: Research Analyst (with enhanced context)
     // ========================================
     const research = await step.run('research-analyst-synthesis', async () => {
-      console.log(`[Workflow 2] Running Research Analyst synthesis...`)
-      return await researchLead(lead, {
+      console.log(`[Workflow 2] Running Research Analyst synthesis with enhanced context...`)
+
+      // Build enhanced raw data for backwards compatibility with researchLead
+      const enhancedRawData = {
         linkedinProfile,
         linkedinCompany,
-        perplexityResults,
-      })
+        perplexityResults: perplexityResearch
+          ? {
+              content: perplexityResearch.summary,
+              citations: [] as string[],
+              query: `${lead.company_name} + ${lead.first_name} ${lead.last_name}`,
+            }
+          : null,
+        // New enhanced data
+        linkedinPosts: [
+          ...((linkedinProfile?.posts || []) as Array<{ text: string; date?: string; likes?: number; comments?: number }>),
+          ...((linkedinCompany?.posts || []) as Array<{ text: string; date?: string; likes?: number; comments?: number }>),
+        ],
+        intentData: {
+          companyDomain: lead.company_domain || '',
+          companyName: lead.company_name,
+          pageViews: ((lead.intent_signal as Record<string, unknown>)?.pages_visited || []) as Array<{ page: string }>,
+          totalVisits: lead.visit_count || 1,
+        } as IntentData,
+      }
+
+      return await researchLead(lead, enhancedRawData)
     })
 
     console.log(`[Workflow 2] Research synthesis complete:`)
@@ -242,14 +377,14 @@ export const researchPipeline = inngest.createFunction(
     console.log(`  - Messaging Angles: ${research.messaging_angles.length}`)
 
     // ========================================
-    // STORE RESULTS
+    // STORE RESULTS (Enhanced)
     // ========================================
     await step.run('store-research', async () => {
       // 1. Upsert to research_records (current state snapshot)
       const { error: researchError } = await supabase.from('research_records').upsert(
         {
           lead_id: lead.id,
-          perplexity_raw: perplexityResults?.content || null,
+          perplexity_raw: perplexityResearch?.summary || null,
           apify_raw: {
             linkedin_personal: linkedinProfile,
             linkedin_company: linkedinCompany,
@@ -260,11 +395,34 @@ export const researchPipeline = inngest.createFunction(
             messaging_angles: research.messaging_angles,
             company_intel: research.company_intel,
             relationship: research.relationship,
+            // Enhanced signals
+            enhanced: {
+              intentScore: intentScore.score,
+              intentTier: intentScore.tier,
+              intentUrgency: intentScore.urgency,
+              painSignals: allPainSignals.map((p) => ({
+                topic: p.topic,
+                confidence: p.confidence,
+                text: p.text.substring(0, 200),
+              })),
+              compositeTriggers,
+              outreachGuidance,
+              perplexityRecency: {
+                funding: perplexityResearch?.funding.recency || 'unknown',
+                hiring: perplexityResearch?.hiring.recency || 'unknown',
+                personVisibility: perplexityResearch?.personVisibility.recency || 'unknown',
+              },
+              linkedInTone: personalLinkedInAnalysis?.tone?.primary || null,
+              bestHook: bestHook
+                ? { topic: bestHook.topic, angle: bestHook.angle }
+                : null,
+            },
             waterfall_summary: {
               personal_linkedin_used: !!linkedinProfile,
               company_linkedin_used: !!linkedinCompany,
-              perplexity_used: !!perplexityResults,
+              perplexity_used: !!perplexityResearch,
               early_stop: hasSufficientTriggers,
+              intent_score_used: true,
             },
           },
           updated_at: new Date().toISOString(),
@@ -279,7 +437,8 @@ export const researchPipeline = inngest.createFunction(
 
       // 2. Append to lead_memories (history log)
       const topTrigger = research.triggers[0]
-      const memorySummary = `${research.persona_match.type} (${research.persona_match.decision_level}), ${research.relationship.type}: ${topTrigger?.fact?.substring(0, 100) || 'No triggers'}...`
+      const painSummary = allPainSignals.length > 0 ? ` Pain: "${allPainSignals[0].topic}"` : ''
+      const memorySummary = `${research.persona_match.type} (${research.persona_match.decision_level}), Intent: ${intentScore.tier} (${intentScore.score}), ${research.relationship.type}: ${topTrigger?.fact?.substring(0, 80) || 'No triggers'}${painSummary}...`
 
       const { error: memoryError } = await supabase.from('lead_memories').insert({
         lead_id: lead.id,
@@ -292,10 +451,18 @@ export const researchPipeline = inngest.createFunction(
           messaging_angles: research.messaging_angles,
           company_intel: research.company_intel,
           relationship: research.relationship,
+          // Enhanced context for future reference
+          enhanced: {
+            intentScore: intentScore.score,
+            intentTier: intentScore.tier,
+            painSignals: allPainSignals,
+            compositeTriggers,
+            outreachGuidance,
+          },
           waterfall_summary: {
             personal_linkedin_used: !!linkedinProfile,
             company_linkedin_used: !!linkedinCompany,
-            perplexity_used: !!perplexityResults,
+            perplexity_used: !!perplexityResearch,
             early_stop: hasSufficientTriggers,
           },
         },
@@ -321,7 +488,7 @@ export const researchPipeline = inngest.createFunction(
         .eq('id', lead.id)
     })
 
-    // Log engagement
+    // Log engagement (enhanced)
     await step.run('log-research-complete', async () => {
       await supabase.from('engagement_log').insert({
         lead_id: lead.id,
@@ -332,16 +499,25 @@ export const researchPipeline = inngest.createFunction(
           decision_level: research.persona_match.decision_level,
           trigger_count: research.triggers.length,
           top_trigger: research.triggers[0]?.type || null,
+          // Enhanced metadata
+          intent_score: intentScore.score,
+          intent_tier: intentScore.tier,
+          pain_signal_count: allPainSignals.length,
+          outreach_urgency: outreachGuidance.urgency,
+          active_triggers: Object.entries(compositeTriggers)
+            .filter(([_, v]) => v)
+            .map(([k]) => k),
           waterfall_steps_used: [
+            'intent_scoring',
             linkedinProfile ? 'personal_linkedin' : null,
             linkedinCompany ? 'company_linkedin' : null,
-            perplexityResults ? 'perplexity' : null,
+            perplexityResearch ? 'perplexity_enhanced' : null,
           ].filter(Boolean),
         },
       })
     })
 
-    // Emit event for next workflow
+    // Emit event for next workflow (enhanced with outreach guidance)
     await step.sendEvent('trigger-message-crafting', {
       name: 'lead.research-complete',
       data: {
@@ -351,6 +527,20 @@ export const researchPipeline = inngest.createFunction(
         top_triggers: research.triggers.slice(0, 3),
         messaging_angles: research.messaging_angles,
         qualification: eventData.qualification,
+        // Enhanced data for Agent 3
+        enhanced: {
+          intentScore: intentScore.score,
+          intentTier: intentScore.tier,
+          painSignals: allPainSignals.slice(0, 3).map((p) => ({
+            topic: p.topic,
+            confidence: p.confidence,
+          })),
+          outreachGuidance,
+          compositeTriggers,
+          bestHook: bestHook
+            ? { topic: bestHook.topic, angle: bestHook.angle, postSnippet: bestHook.postSnippet }
+            : null,
+        },
       },
     })
 
@@ -362,10 +552,16 @@ export const researchPipeline = inngest.createFunction(
       persona: research.persona_match.type,
       decision_level: research.persona_match.decision_level,
       trigger_count: research.triggers.length,
+      // Enhanced return data
+      intent_score: intentScore.score,
+      intent_tier: intentScore.tier,
+      pain_signals: allPainSignals.length,
+      outreach_urgency: outreachGuidance.urgency,
       waterfall_steps: {
+        intent_scoring: true,
         personal_linkedin: !!linkedinProfile,
         company_linkedin: !!linkedinCompany,
-        perplexity: !!perplexityResults,
+        perplexity: !!perplexityResearch,
         early_stop: hasSufficientTriggers,
       },
     }

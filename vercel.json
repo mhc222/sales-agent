@@ -9,6 +9,10 @@
     {
       "path": "/api/cron-ingest-daily-visitors",
       "schedule": "0 9 * * *"
+    },
+    {
+      "path": "/api/cron-learning-analysis",
+      "schedule": "0 6 * * *"
     }
   ]
 }

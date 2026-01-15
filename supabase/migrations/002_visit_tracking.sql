@@ -12,7 +12,7 @@ ADD COLUMN IF NOT EXISTS in_ghl_company BOOLEAN DEFAULT FALSE,
 ADD COLUMN IF NOT EXISTS in_smartlead BOOLEAN DEFAULT FALSE,
 ADD COLUMN IF NOT EXISTS in_heyreach BOOLEAN DEFAULT FALSE;
 
--- Add qualification result storage to leads table
+-- Add qualification result storage to leads tablewhast
 ALTER TABLE leads
 ADD COLUMN IF NOT EXISTS qualification_decision VARCHAR,
 ADD COLUMN IF NOT EXISTS qualification_reasoning TEXT,
