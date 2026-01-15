@@ -279,65 +279,78 @@ function buildResearchPrompt(
     : 'Not available'
 
   // Build intent signal section based on lead source
-  const intentScore = (lead as Record<string, unknown>).intent_score as number | undefined
-  const intentTier = intentScore !== undefined
-    ? intentScore >= 90 ? 'HIGH INTENT (90-100)'
-    : intentScore >= 71 ? 'MEDIUM INTENT (71-89)'
-    : intentScore >= 54 ? 'ENTERING INTENT (54-70)'
-    : 'LOW INTENT (<54)'
-    : 'Unknown'
-
   const intentSignalSection = lead.source === 'intent_data'
     ? `Intent Signal (Daily Intent Data):
 - Source: AudienceLab intent data (NOT website visitor)
-- Intent Score: ${intentScore || 'N/A'}/100
-- Intent Tier: ${intentTier}
-- This lead was identified through intent data monitoring, NOT from visiting the JSB Media website
+- This lead was identified through intent keyword monitoring
 - DO NOT mention or reference website visits in your analysis
 
 ================================================================================
-CRITICAL: WHAT THE INTENT SCORE ACTUALLY MEANS
+CRITICAL: EVERYONE HERE HAS INTENT - YOUR JOB IS TO RANK BY SIGNALS
 ================================================================================
 
-AudienceLab measures "DEVIATION FROM STANDARD BEHAVIOR" - not just raw activity.
+Every lead in this system has already been filtered for intent by Audience Lab.
+They're monitoring keywords related to our services and these leads matched.
 
-The score compares this person's LAST 7 DAYS of browsing to their long-term baseline.
-A high score means their behavior SPIKED recently - they just entered an active buying cycle.
+YOUR JOB: Find and rank the RESEARCH SIGNALS that tell us:
+1. HOW URGENT is their need? (timing)
+2. HOW STRONG is the fit? (relevance)
+3. HOW READY are they to engage? (buying stage)
 
-This is the difference between:
-- "Bob the Browser" (steady 66→70 score) - casually interested, no urgency
-- "Colin the Customer" (spiked 40→90) - just started actively evaluating, buying window is NOW
+================================================================================
+SIGNAL PRIORITY HIERARCHY (Use this to rank triggers)
+================================================================================
 
-INTENT TIERS AND WHAT THEY MEAN:
+🔥 TIER 1 - IMMEDIATE ACTION SIGNALS (highest priority):
+   - Recent funding (last 90 days) with stated growth goals
+   - New marketing leadership (CMO, VP Marketing, Head of Growth)
+   - Active hiring for marketing/growth roles RIGHT NOW
+   - Agency breakup or vendor consolidation mentions
+   - Explicit pain posts: "struggling with attribution", "can't scale", "ROI unknown"
+   → These = HOT. They're actively looking to solve this problem.
 
-📍 HIGH INTENT (90-100): ACTIVE BUYING PHASE
-   - Their behavior JUST spiked in the last 7 days
-   - They're on contact pages, resource pages, comparing options
-   - This is "Colin the Customer" - ready to engage NOW
-   - The window is narrow - they're making decisions this week
-   - Outreach approach: Be direct, confident, assume they're evaluating
+⚡ TIER 2 - STRONG TIMING SIGNALS:
+   - Product launch or expansion (new markets, new SKUs)
+   - Competitive pressure mentions
+   - Multi-channel activity without cohesion (running Meta + Google + TikTok separately)
+   - Budget mentions or spend discussions
+   - Recent (30-90 days) thought leadership on relevant topics
+   → These = WARM. Good timing, clear relevance.
 
-📍 MEDIUM INTENT (71-89): CONSIDERATION PHASE
-   - Growing upward trend in their behavior
-   - They're looking at competitors, diving deeper
-   - Moving from education to active consideration
-   - Outreach approach: Reference their likely research, show differentiation
+📊 TIER 3 - CONTEXT SIGNALS:
+   - Industry challenges they discuss
+   - Tech stack they're using
+   - General growth trajectory
+   - Older thought leadership (6+ months)
+   → These = USEFUL for personalization but not urgency indicators.
 
-📍 ENTERING INTENT (54-70): EARLY RESEARCH PHASE
-   - Just starting their journey
-   - Visiting blogs, educational content
-   - Good for nurture, not aggressive outreach
-   - Outreach approach: Lead with pure value, no hard CTAs
+================================================================================
+HOW TO DETERMINE OUTREACH READINESS
+================================================================================
 
-YOUR JOB: Find triggers that explain WHY they entered this buying cycle.
-The intent score tells us WHEN (now). The triggers tell us WHY (pain points).
+Based on the signals you find, categorize the lead:
+
+🟢 HIGH READINESS (multiple Tier 1 signals OR Tier 1 + Tier 2 combo):
+   - They have active pain AND timing pressure
+   - Example: New CMO + hiring marketing team + posts about attribution struggles
+   - Outreach: Be direct, confident, reference their specific situation
+
+🟡 MEDIUM READINESS (Tier 2 signals, maybe one Tier 1):
+   - Clear relevance but less urgency
+   - Example: Expanding to new markets + thought leadership on scaling
+   - Outreach: Standard approach, build case for why now
+
+🟠 LOWER READINESS (mostly Tier 3 signals):
+   - Good fit but no clear timing trigger
+   - Example: Right industry, relevant role, but no recent activity
+   - Outreach: Lead with value, softer approach, longer nurture
 
 ================================================================================
 
 TARGET ICP FOR INTENT DATA:
 Mid-market companies ($10M-$500M revenue) in competitive, high-volume industries—QSR, e-commerce, travel, tourism, hospitality, franchises, home services—that are scaling across multiple locations or channels but can't compete on marketing sophistication against larger players. They need data-driven, omnichannel activation.
 
-INTENT SIGNAL BEING MEASURED:
+INTENT KEYWORDS BEING MONITORED:
 Companies activating multiple channels (Meta, TikTok, Reddit, Search, programmatic, organic) but can't execute cohesively, prove ROI, or scale profitably. They have budgets and ambition, but fragmented data, poor attribution, and no unified insight into what actually works. They need identity resolution and smarter targeting.`
     : `Intent Signal (Website Visitor):
 - Visit Count: ${lead.visit_count || 1} visits to JSB Media website

@@ -43,52 +43,57 @@ OUTREACH GUIDANCE (Use This!)
 The Context Profile may contain an `outreachGuidance` section with signals from enhanced research. **If present, these take priority:**
 
 --------------------------------------------------------------------------------
-UNDERSTANDING INTENT SCORES (Critical Context)
+EVERYONE HAS INTENT - ADJUST BASED ON SIGNAL STRENGTH
 --------------------------------------------------------------------------------
 
-For intent data leads, the `intentScore` and `intentTier` tell you WHERE they are in their buying journey.
+Every lead in this system has already been filtered for intent. They matched keywords we're monitoring. Your job is to write outreach calibrated to the STRENGTH of the research signals we found.
 
-**How Audience Lab measures intent:** They compare the person's LAST 7 DAYS of browsing behavior to their long-term baseline. A high score means their behavior SPIKED - they just entered an active buying cycle.
+**Signal Tiers (from research):**
 
-This distinguishes:
-- "Bob the Browser" (steady 66→70) - casually interested, no change in behavior
-- "Colin the Customer" (spiked 40→90) - just started actively evaluating, making decisions NOW
+🔥 **TIER 1 SIGNALS** = They're actively trying to solve this problem NOW
+   - Recent funding, new marketing leadership, hiring for growth roles
+   - Agency breakup or vendor consolidation mentions
+   - Explicit pain: "struggling with attribution", "can't scale", "ROI unknown"
 
-**Intent Tiers and How to Write:**
+⚡ **TIER 2 SIGNALS** = Good timing, clear relevance
+   - Product launch, expansion, competitive pressure
+   - Multi-channel activity (Meta + Google + TikTok but fragmented)
+   - Recent thought leadership on relevant topics
 
-📍 **HIGH INTENT (90-100)** - ACTIVE BUYING PHASE
-   - Their behavior just SPIKED in the last 7 days
-   - They're comparing options and making decisions THIS WEEK
-   - This is "Colin the Customer" - the buying window is NOW
-   - **Write with confidence.** Assume they're evaluating. Be direct about value.
-   - Move faster through the sequence - suggest a call earlier (Email 3-4)
-   - Don't over-educate - they already know the problem, show the solution
+📊 **TIER 3 SIGNALS** = Context for personalization
+   - Industry challenges, tech stack, growth trajectory
+   - Older content or general fit indicators
 
-📍 **MEDIUM INTENT (71-89)** - CONSIDERATION PHASE
-   - Growing upward trend, moving from research to evaluation
-   - They're looking at competitors, diving deeper
-   - **Reference their likely research.** Show differentiation.
-   - Standard 95/5 timing works well
-   - Acknowledge they're doing homework, position as helpful guide
+--------------------------------------------------------------------------------
+HOW TO WRITE BASED ON SIGNAL STRENGTH
+--------------------------------------------------------------------------------
 
-📍 **ENTERING INTENT (54-70)** - EARLY RESEARCH PHASE
-   - Just starting their journey, consuming educational content
-   - They know they have a problem but haven't committed to solving it
-   - **Lead with pure value.** No aggressive CTAs.
-   - Longer nurture sequence, more education, softer asks
-   - Build trust before pitching
+🟢 **HIGH READINESS** (Multiple Tier 1 signals, or Tier 1 + Tier 2 combo):
+   - They have ACTIVE pain + timing pressure
+   - **Write with confidence.** Be direct about value.
+   - Move faster - suggest a call by Email 3-4
+   - Don't over-educate - they know the problem, show the solution
+   - Reference their specific situation directly
 
-📍 **LOW/NO INTENT (<54 or cold)** - NOT IN BUYING CYCLE
-   - No deviation from baseline behavior
-   - Standard cold outreach - focus on pattern interrupts and curiosity
-   - Don't assume they're evaluating anything
+🟡 **MEDIUM READINESS** (Tier 2 signals, maybe one Tier 1):
+   - Clear relevance but less urgency
+   - **Standard 95/5 approach** works well
+   - Build the case for "why now" using their triggers
+   - Position as helpful guide, not pushy seller
+
+🟠 **LOWER READINESS** (Mostly Tier 3 signals):
+   - Good fit but no clear timing trigger
+   - **Lead with pure value.** Softer CTAs.
+   - Longer nurture, more education
+   - Build trust before any ask
+   - Focus on pattern interrupts and curiosity
 
 --------------------------------------------------------------------------------
 
-**Urgency Calibration (from research signals):**
-- `urgency: "high"` → Buying signals detected. Be direct, mention ROI early, suggest a call by email 3.
-- `urgency: "medium"` → Warm interest. Standard 95/5 approach works well.
-- `urgency: "low"` → Early stage. Lead with pure value, delay CTAs.
+**Urgency Calibration (from outreachGuidance):**
+- `urgency: "high"` → Tier 1 signals found. Be direct, mention ROI early, suggest a call by email 3.
+- `urgency: "medium"` → Tier 2 signals. Standard 95/5 approach works well.
+- `urgency: "low"` → Mostly Tier 3. Lead with pure value, delay CTAs.
 
 **Tone Override:**
 - If `outreachGuidance.tone` is set, use it instead of inferring tone. This comes from analyzing their actual LinkedIn posts.
