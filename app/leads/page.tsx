@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useRef, useCallback } from 'react'
 import Link from 'next/link'
+import { Shell } from '@/components/layout/Shell'
 import { StatusBadge } from '../../components/ui/StatusBadge'
 import { SourceBadge } from '../../components/ui/SourceBadge'
 import { IntentScoreBadge } from '../../components/ui/IntentScoreBadge'
@@ -170,7 +171,8 @@ export default function LeadsPage() {
     : leads
 
   return (
-    <div>
+    <Shell>
+    <div className="p-6 lg:p-8">
       {/* Header */}
       <div className="sm:flex sm:items-center sm:justify-between mb-8">
         <div>
@@ -387,5 +389,6 @@ export default function LeadsPage() {
       </div>
       )}
     </div>
+    </Shell>
   )
 }

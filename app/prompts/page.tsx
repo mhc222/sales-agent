@@ -1,5 +1,6 @@
 'use client'
 
+import { Shell } from '@/components/layout/Shell'
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
@@ -394,7 +395,8 @@ export default function PromptsPage() {
     : data.prompts
 
   return (
-    <div className="space-y-6">
+    <Shell>
+    <div className="p-6 lg:p-8 space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -528,5 +530,6 @@ export default function PromptsPage() {
         onCreated={fetchPrompts}
       />
     </div>
+    </Shell>
   )
 }

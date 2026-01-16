@@ -1,5 +1,6 @@
 'use client'
 
+import { Shell } from '@/components/layout/Shell'
 import { useEffect, useState, Suspense } from 'react'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
@@ -271,8 +272,12 @@ function SequencesContent() {
 
 export default function SequencesPage() {
   return (
-    <Suspense fallback={<LoadingState message="Loading sequences..." />}>
-      <SequencesContent />
-    </Suspense>
+    <Shell>
+      <div className="p-6 lg:p-8">
+        <Suspense fallback={<LoadingState message="Loading sequences..." />}>
+          <SequencesContent />
+        </Suspense>
+      </div>
+    </Shell>
   )
 }

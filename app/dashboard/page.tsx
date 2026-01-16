@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
+import { Shell } from '@/components/layout/Shell'
 import { StatCard } from '../../components/ui/StatCard'
 import { LoadingState } from '../../components/ui/LoadingSpinner'
 import { statusColors, cn } from '../../lib/styles'
@@ -148,7 +149,8 @@ export default function DashboardPage() {
   const maxPipelineCount = Math.max(...pipeline.map(p => p.count), 1)
 
   return (
-    <div className="space-y-6">
+    <Shell>
+    <div className="p-6 lg:p-8 space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -328,5 +330,6 @@ export default function DashboardPage() {
         )}
       </div>
     </div>
+    </Shell>
   )
 }

@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { Sidebar } from '../../components/layout/Sidebar'
+import { Shell } from '@/components/layout/Shell'
 
 interface Correction {
   id: string
@@ -177,14 +177,12 @@ export default function CorrectionsPage() {
   }
 
   return (
-    <div className="flex min-h-screen bg-gray-50">
-      <Sidebar />
-
-      <main className="flex-1 ml-64 p-8">
+    <Shell>
+      <div className="p-6 lg:p-8">
         {/* Header */}
         <div className="mb-8">
-          <h1 className="text-3xl font-bold text-jsb-navy">Corrections & Feedback</h1>
-          <p className="text-gray-600 mt-2">
+          <h1 className="text-2xl font-bold text-white">Corrections & Feedback</h1>
+          <p className="text-gray-400 mt-2">
             Provide feedback on AI-generated content. Corrections are automatically applied to future emails.
           </p>
         </div>
@@ -635,7 +633,7 @@ export default function CorrectionsPage() {
             </div>
           </div>
         )}
-      </main>
-    </div>
+      </div>
+    </Shell>
   )
 }

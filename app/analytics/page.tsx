@@ -1,5 +1,6 @@
 'use client'
 
+import { Shell } from '@/components/layout/Shell'
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import {
@@ -112,7 +113,8 @@ export default function AnalyticsPage() {
   const maxFunnelCount = Math.max(...funnel.map(f => f.count), 1)
 
   return (
-    <div className="space-y-6">
+    <Shell>
+    <div className="p-6 lg:p-8 space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -325,5 +327,6 @@ export default function AnalyticsPage() {
         )}
       </div>
     </div>
+    </Shell>
   )
 }
