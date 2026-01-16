@@ -101,12 +101,12 @@ export function createApolloClient(apiKey: string) {
   const headers = {
     'Content-Type': 'application/json',
     'Cache-Control': 'no-cache',
+    'x-api-key': apiKey,
   }
 
   return {
     async searchPeople(params: ApolloSearchParams): Promise<ApolloSearchResult> {
       const body: Record<string, unknown> = {
-        api_key: apiKey,
         page: params.page || 1,
         per_page: params.perPage || 25,
         contact_email_status: ['verified'],
@@ -159,7 +159,6 @@ export function createApolloClient(apiKey: string) {
         method: 'POST',
         headers,
         body: JSON.stringify({
-          api_key: apiKey,
           id,
         }),
       })
@@ -177,7 +176,6 @@ export function createApolloClient(apiKey: string) {
         method: 'POST',
         headers,
         body: JSON.stringify({
-          api_key: apiKey,
           email,
         }),
       })

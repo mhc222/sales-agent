@@ -28,6 +28,8 @@ export interface Events {
       company_description?: string
       intent_signal?: Record<string, unknown>
       tenant_id: string
+      source?: 'pixel' | 'intent' | 'apollo'
+      source_metadata?: Record<string, unknown>
     }
   }
   'lead.ready-for-deployment': {

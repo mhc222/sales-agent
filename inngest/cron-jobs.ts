@@ -1,12 +1,20 @@
 /**
  * Inngest Cron Jobs
  * All scheduled tasks run via Inngest instead of Vercel cron
+ * Multi-tenant: Each cron iterates over all tenants with configured credentials
  */
 
 import { inngest } from './client'
 import { createClient } from '@supabase/supabase-js'
 import { calculateIntentScore, IntentLeadData } from '../src/lib/intent-scoring'
 import { notifyDailySummary } from '../src/lib/slack-notifier'
+import {
+  getAllTenants,
+  hasValidCredentials,
+  Tenant,
+  TenantSettings,
+} from '../src/lib/tenant-settings'
+import { createApolloClient, ApolloLead, INDUSTRY_IDS } from '../src/lib/apollo'
 
 const supabase = createClient(
   process.env.SUPABASE_URL!,
@@ -86,219 +94,291 @@ function mapVisitorToIntentLead(visitor: AudienceLabVisitor): IntentLeadData {
   }
 }
 
+function mapVisitorToLeadEvent(
+  visitor: AudienceLabVisitor,
+  tenantId: string,
+  source: 'pixel' | 'intent'
+) {
+  const eventData = parseEventData(visitor.EVENT_DATA)
+  return {
+    first_name: visitor.FIRST_NAME,
+    last_name: visitor.LAST_NAME,
+    email: visitor.BUSINESS_VERIFIED_EMAILS.split(',')[0].trim(),
+    job_title: visitor.JOB_TITLE || undefined,
+    headline: visitor.HEADLINE || undefined,
+    department: visitor.DEPARTMENT || undefined,
+    seniority_level: visitor.SENIORITY_LEVEL || undefined,
+    years_experience: visitor.INFERRED_YEARS_EXPERIENCE
+      ? parseInt(visitor.INFERRED_YEARS_EXPERIENCE, 10)
+      : undefined,
+    linkedin_url: visitor.LINKEDIN_URL || undefined,
+    company_name: visitor.COMPANY_NAME || 'Unknown',
+    company_linkedin_url: visitor.COMPANY_LINKEDIN_URL || undefined,
+    company_domain: visitor.COMPANY_DOMAIN || undefined,
+    company_employee_count: parseEmployeeCount(visitor.COMPANY_EMPLOYEE_COUNT),
+    company_revenue: visitor.COMPANY_REVENUE || undefined,
+    company_industry: visitor.COMPANY_INDUSTRY || undefined,
+    company_description: visitor.COMPANY_DESCRIPTION || undefined,
+    intent_signal:
+      source === 'pixel'
+        ? {
+            page_visited: eventData.url || visitor.URL,
+            time_on_page: eventData.timeOnPage,
+            event_type: visitor.EVENT_TYPE,
+            timestamp: new Date().toISOString(),
+          }
+        : undefined,
+    tenant_id: tenantId,
+    source,
+  }
+}
+
+function normalizeApolloLead(
+  lead: ApolloLead,
+  tenantId: string,
+  sourceMetadata?: Record<string, unknown>
+) {
+  return {
+    first_name: lead.first_name,
+    last_name: lead.last_name,
+    email: lead.email,
+    job_title: lead.title || undefined,
+    headline: lead.headline || undefined,
+    linkedin_url: lead.linkedin_url || undefined,
+    company_name: lead.organization?.name || 'Unknown',
+    company_linkedin_url: lead.organization?.linkedin_url || undefined,
+    company_domain: lead.organization?.website_url?.replace(/^https?:\/\//, '') || undefined,
+    company_employee_count: lead.organization?.estimated_num_employees || undefined,
+    company_industry: lead.organization?.industry || undefined,
+    tenant_id: tenantId,
+    source: 'apollo' as const,
+    source_metadata: sourceMetadata,
+  }
+}
+
 // ============================================================================
-// CRON 1: Daily Intent Data Ingestion (10am UTC)
+// CRON 1: Daily Intent Data Ingestion (10am UTC) - Multi-Tenant
 // ============================================================================
 
 export const cronDailyIntent = inngest.createFunction(
   {
     id: 'cron-daily-intent',
-    name: 'Daily Intent Data Ingestion',
+    name: 'Daily Intent Data Ingestion (All Tenants)',
     retries: 2,
   },
   { cron: '0 10 * * *' }, // 10am UTC daily
   async ({ step }) => {
-    console.log('[Cron Intent] Starting daily intent data ingestion...')
+    console.log('[Cron Intent] Starting daily intent data ingestion (multi-tenant)...')
 
-    // Step 1: Fetch from AudienceLab
-    const apiResponse = await step.run('fetch-intent-data', async () => {
-      const intentApiUrl = process.env.INTENT_API_URL
-      const apiKey = process.env.VISITOR_API_KEY
+    // Get all tenants
+    const tenants = await step.run('get-tenants', async () => {
+      return getAllTenants()
+    })
 
-      if (!intentApiUrl || !apiKey) {
-        throw new Error('Missing intent API credentials (INTENT_API_URL or VISITOR_API_KEY)')
+    const results: Array<{ tenant_id: string; processed: number; status: string }> = []
+
+    // Process each tenant with intent credentials
+    for (const tenant of tenants) {
+      const config = tenant.settings?.integrations?.intent
+      if (!config?.api_url || !config?.api_key) {
+        console.log(`[Cron Intent] Skipping tenant ${tenant.id} - no intent credentials`)
+        continue
       }
 
-      const response = await fetch(intentApiUrl, {
-        method: 'GET',
-        headers: {
-          'X-API-Key': apiKey,
-          'Content-Type': 'application/json',
-        },
+      const result = await step.run(`process-tenant-${tenant.id}`, async () => {
+        try {
+          // Fetch from tenant's intent API
+          const response = await fetch(config.api_url!, {
+            method: 'GET',
+            headers: {
+              'X-API-Key': config.api_key!,
+              'Content-Type': 'application/json',
+            },
+          })
+
+          if (!response.ok) {
+            throw new Error(`Intent API failed: ${response.status} ${response.statusText}`)
+          }
+
+          const apiResponse = (await response.json()) as AudienceLabResponse
+          const visitors = apiResponse.data || []
+          const qualifiedVisitors = visitors.filter(
+            (v) => v.BUSINESS_VERIFIED_EMAILS && v.FIRST_NAME && v.LAST_NAME
+          )
+
+          if (qualifiedVisitors.length === 0) {
+            return { tenant_id: tenant.id, processed: 0, status: 'no_qualified_leads' }
+          }
+
+          // Score and rank leads
+          const autoResearchLimit = tenant.settings?.data_sources?.auto_research_limit ?? 20
+          const minIntentScore = tenant.settings?.data_sources?.min_intent_score ?? 60
+
+          const scoredLeads = qualifiedVisitors
+            .map((visitor) => {
+              const intentData = mapVisitorToIntentLead(visitor)
+              const scoreResult = calculateIntentScore(intentData)
+              return {
+                visitor,
+                intentData,
+                score: scoreResult.totalScore,
+                tier: scoreResult.tier,
+                breakdown: scoreResult.breakdown,
+                reasoning: scoreResult.reasoning,
+              }
+            })
+            .filter((lead) => lead.score >= minIntentScore)
+            .sort((a, b) => b.score - a.score)
+            .slice(0, 100) // Top 100
+
+          // Send events (top N get auto-research based on tenant config)
+          const events = scoredLeads.map((lead, index) => ({
+            name: 'lead.intent-ingested' as const,
+            data: {
+              first_name: lead.visitor.FIRST_NAME,
+              last_name: lead.visitor.LAST_NAME,
+              email: lead.visitor.BUSINESS_VERIFIED_EMAILS.split(',')[0].trim(),
+              job_title: lead.visitor.JOB_TITLE || undefined,
+              headline: lead.visitor.HEADLINE || undefined,
+              department: lead.visitor.DEPARTMENT || undefined,
+              seniority_level: lead.visitor.SENIORITY_LEVEL || undefined,
+              years_experience: lead.visitor.INFERRED_YEARS_EXPERIENCE
+                ? parseInt(lead.visitor.INFERRED_YEARS_EXPERIENCE, 10)
+                : undefined,
+              linkedin_url: lead.visitor.LINKEDIN_URL || undefined,
+              company_name: lead.visitor.COMPANY_NAME || 'Unknown',
+              company_linkedin_url: lead.visitor.COMPANY_LINKEDIN_URL || undefined,
+              company_domain: lead.visitor.COMPANY_DOMAIN || undefined,
+              company_employee_count: parseEmployeeCount(lead.visitor.COMPANY_EMPLOYEE_COUNT),
+              company_revenue: lead.visitor.COMPANY_REVENUE || undefined,
+              company_industry: lead.visitor.COMPANY_INDUSTRY || undefined,
+              company_description: lead.visitor.COMPANY_DESCRIPTION || undefined,
+              tenant_id: tenant.id,
+              intent_score: lead.score,
+              intent_tier: lead.tier,
+              intent_breakdown: lead.breakdown,
+              intent_reasoning: lead.reasoning,
+              auto_research: index < autoResearchLimit,
+              batch_date: new Date().toISOString().split('T')[0],
+              batch_rank: index + 1,
+            },
+          }))
+
+          if (events.length) await inngest.send(events)
+
+          return {
+            tenant_id: tenant.id,
+            processed: events.length,
+            auto_research: Math.min(autoResearchLimit, events.length),
+            status: 'success',
+          }
+        } catch (error) {
+          console.error(`[Cron Intent] Error processing tenant ${tenant.id}:`, error)
+          return {
+            tenant_id: tenant.id,
+            processed: 0,
+            status: 'error',
+            error: error instanceof Error ? error.message : 'Unknown error',
+          }
+        }
       })
 
-      if (!response.ok) {
-        throw new Error(`Intent API failed: ${response.status} ${response.statusText}`)
-      }
-
-      return response.json() as Promise<AudienceLabResponse>
-    })
-
-    const visitors = apiResponse.data || []
-    const qualifiedVisitors = visitors.filter(
-      (v) => v.BUSINESS_VERIFIED_EMAILS && v.FIRST_NAME && v.LAST_NAME
-    )
-
-    console.log(
-      `[Cron Intent] Received ${visitors.length} records, ${qualifiedVisitors.length} with verified emails`
-    )
-
-    if (qualifiedVisitors.length === 0) {
-      return { status: 'success', message: 'No qualified intent leads', processed: 0 }
+      results.push(result)
     }
-
-    // Step 2: Score and rank leads
-    const scoredLeads = await step.run('score-leads', async () => {
-      return qualifiedVisitors
-        .map((visitor) => {
-          const intentData = mapVisitorToIntentLead(visitor)
-          const scoreResult = calculateIntentScore(intentData)
-          return {
-            visitor,
-            intentData,
-            score: scoreResult.totalScore,
-            tier: scoreResult.tier,
-            breakdown: scoreResult.breakdown,
-            reasoning: scoreResult.reasoning,
-          }
-        })
-        .sort((a, b) => b.score - a.score)
-        .slice(0, 100) // Top 100
-    })
-
-    // Step 3: Send events (top 20 get auto-research)
-    const sendResult = await step.run('send-events', async () => {
-      const events = scoredLeads.map((lead, index) => ({
-        name: 'lead.intent-ingested' as const,
-        data: {
-          first_name: lead.visitor.FIRST_NAME,
-          last_name: lead.visitor.LAST_NAME,
-          email: lead.visitor.BUSINESS_VERIFIED_EMAILS.split(',')[0].trim(),
-          job_title: lead.visitor.JOB_TITLE || undefined,
-          headline: lead.visitor.HEADLINE || undefined,
-          department: lead.visitor.DEPARTMENT || undefined,
-          seniority_level: lead.visitor.SENIORITY_LEVEL || undefined,
-          years_experience: lead.visitor.INFERRED_YEARS_EXPERIENCE
-            ? parseInt(lead.visitor.INFERRED_YEARS_EXPERIENCE, 10)
-            : undefined,
-          linkedin_url: lead.visitor.LINKEDIN_URL || undefined,
-          company_name: lead.visitor.COMPANY_NAME || 'Unknown',
-          company_linkedin_url: lead.visitor.COMPANY_LINKEDIN_URL || undefined,
-          company_domain: lead.visitor.COMPANY_DOMAIN || undefined,
-          company_employee_count: parseEmployeeCount(lead.visitor.COMPANY_EMPLOYEE_COUNT),
-          company_revenue: lead.visitor.COMPANY_REVENUE || undefined,
-          company_industry: lead.visitor.COMPANY_INDUSTRY || undefined,
-          company_description: lead.visitor.COMPANY_DESCRIPTION || undefined,
-          tenant_id: process.env.TENANT_ID!,
-          intent_score: lead.score,
-          intent_tier: lead.tier,
-          intent_breakdown: lead.breakdown,
-          intent_reasoning: lead.reasoning,
-          auto_research: index < 20,
-          batch_date: new Date().toISOString().split('T')[0],
-          batch_rank: index + 1,
-        },
-      }))
-
-      return inngest.send(events)
-    })
 
     return {
       status: 'success',
-      total_records: visitors.length,
-      qualified_records: qualifiedVisitors.length,
-      processed: scoredLeads.length,
-      auto_research: Math.min(20, scoredLeads.length),
-      qualified_only: Math.max(0, scoredLeads.length - 20),
+      tenants_processed: results.length,
+      results,
     }
   }
 )
 
 // ============================================================================
-// CRON 2: Daily Visitor Ingestion (9am UTC)
+// CRON 2: Daily Pixel Visitor Ingestion (9am UTC) - Multi-Tenant
 // ============================================================================
 
 export const cronDailyVisitors = inngest.createFunction(
   {
     id: 'cron-daily-visitors',
-    name: 'Daily Pixel Visitor Ingestion',
+    name: 'Daily Pixel Visitor Ingestion (All Tenants)',
     retries: 2,
   },
   { cron: '0 9 * * *' }, // 9am UTC daily
   async ({ step }) => {
-    console.log('[Cron Visitors] Starting daily visitor ingestion...')
+    console.log('[Cron Visitors] Starting daily visitor ingestion (multi-tenant)...')
 
-    // Step 1: Fetch from AudienceLab
-    const apiResponse = await step.run('fetch-visitor-data', async () => {
-      const visitorApiUrl = process.env.VISITOR_API_URL
-      const visitorApiKey = process.env.VISITOR_API_KEY
-
-      if (!visitorApiUrl || !visitorApiKey) {
-        throw new Error('Missing visitor API credentials')
-      }
-
-      const response = await fetch(visitorApiUrl, {
-        method: 'GET',
-        headers: {
-          'X-API-Key': visitorApiKey,
-          'Content-Type': 'application/json',
-        },
-      })
-
-      if (!response.ok) {
-        throw new Error(`Visitor API failed: ${response.status} ${response.statusText}`)
-      }
-
-      return response.json() as Promise<AudienceLabResponse>
+    // Get all tenants
+    const tenants = await step.run('get-tenants', async () => {
+      return getAllTenants()
     })
 
-    const visitors = apiResponse.data || []
-    const qualifiedVisitors = visitors.filter(
-      (v) => v.BUSINESS_VERIFIED_EMAILS && v.FIRST_NAME && v.LAST_NAME
-    )
+    const results: Array<{ tenant_id: string; processed: number; status: string }> = []
 
-    console.log(
-      `[Cron Visitors] Received ${visitors.length} visitors, ${qualifiedVisitors.length} with verified emails`
-    )
+    // Process each tenant with pixel credentials
+    for (const tenant of tenants) {
+      const config = tenant.settings?.integrations?.pixel
+      if (!config?.api_url || !config?.api_key) {
+        console.log(`[Cron Visitors] Skipping tenant ${tenant.id} - no pixel credentials`)
+        continue
+      }
 
-    if (qualifiedVisitors.length === 0) {
-      return { status: 'success', message: 'No qualified visitors', processed: 0 }
-    }
-
-    // Step 2: Send events to Inngest
-    const sendResult = await step.run('send-events', async () => {
-      const events = qualifiedVisitors.map((visitor) => {
-        const eventData = parseEventData(visitor.EVENT_DATA)
-        return {
-          name: 'lead.ingested' as const,
-          data: {
-            first_name: visitor.FIRST_NAME,
-            last_name: visitor.LAST_NAME,
-            email: visitor.BUSINESS_VERIFIED_EMAILS.split(',')[0].trim(),
-            job_title: visitor.JOB_TITLE || undefined,
-            headline: visitor.HEADLINE || undefined,
-            department: visitor.DEPARTMENT || undefined,
-            seniority_level: visitor.SENIORITY_LEVEL || undefined,
-            years_experience: visitor.INFERRED_YEARS_EXPERIENCE
-              ? parseInt(visitor.INFERRED_YEARS_EXPERIENCE, 10)
-              : undefined,
-            linkedin_url: visitor.LINKEDIN_URL || undefined,
-            company_name: visitor.COMPANY_NAME || 'Unknown',
-            company_linkedin_url: visitor.COMPANY_LINKEDIN_URL || undefined,
-            company_domain: visitor.COMPANY_DOMAIN || undefined,
-            company_employee_count: parseEmployeeCount(visitor.COMPANY_EMPLOYEE_COUNT),
-            company_revenue: visitor.COMPANY_REVENUE || undefined,
-            company_industry: visitor.COMPANY_INDUSTRY || undefined,
-            company_description: visitor.COMPANY_DESCRIPTION || undefined,
-            intent_signal: {
-              page_visited: eventData.url || visitor.URL,
-              time_on_page: eventData.timeOnPage,
-              event_type: visitor.EVENT_TYPE,
-              timestamp: new Date().toISOString(),
+      const result = await step.run(`process-tenant-${tenant.id}`, async () => {
+        try {
+          // Fetch from tenant's pixel API
+          const response = await fetch(config.api_url!, {
+            method: 'GET',
+            headers: {
+              'X-API-Key': config.api_key!,
+              'Content-Type': 'application/json',
             },
-            tenant_id: process.env.TENANT_ID!,
-          },
+          })
+
+          if (!response.ok) {
+            throw new Error(`Pixel API failed: ${response.status} ${response.statusText}`)
+          }
+
+          const apiResponse = (await response.json()) as AudienceLabResponse
+          const visitors = apiResponse.data || []
+          const qualifiedVisitors = visitors.filter(
+            (v) => v.BUSINESS_VERIFIED_EMAILS && v.FIRST_NAME && v.LAST_NAME
+          )
+
+          if (qualifiedVisitors.length === 0) {
+            return { tenant_id: tenant.id, processed: 0, status: 'no_qualified_visitors' }
+          }
+
+          // Send events to Inngest
+          const events = qualifiedVisitors.map((visitor) => ({
+            name: 'lead.ingested' as const,
+            data: mapVisitorToLeadEvent(visitor, tenant.id, 'pixel'),
+          }))
+
+          if (events.length) await inngest.send(events)
+
+          return {
+            tenant_id: tenant.id,
+            processed: events.length,
+            status: 'success',
+          }
+        } catch (error) {
+          console.error(`[Cron Visitors] Error processing tenant ${tenant.id}:`, error)
+          return {
+            tenant_id: tenant.id,
+            processed: 0,
+            status: 'error',
+            error: error instanceof Error ? error.message : 'Unknown error',
+          }
         }
       })
 
-      return inngest.send(events)
-    })
+      results.push(result)
+    }
 
     return {
       status: 'success',
-      total_visitors: visitors.length,
-      processed: qualifiedVisitors.length,
-      has_more: apiResponse.has_more,
+      tenants_processed: results.length,
+      results,
     }
   }
 )
@@ -403,10 +483,11 @@ export const cronDailyStats = inngest.createFunction(
         bounceRate: sends > 0 ? Math.round((bounces / sends) * 100) : 0,
         pendingReviews: pendingReviews || 0,
         correctionsLearned: correctionsLearned || 0,
-        topCompanies: recentLeads?.map((l) => ({
-          name: l.company_name || 'Unknown',
-          status: l.status || 'unknown',
-        })) || [],
+        topCompanies:
+          recentLeads?.map((l) => ({
+            name: l.company_name || 'Unknown',
+            status: l.status || 'unknown',
+          })) || [],
       }
     })
 
@@ -465,32 +546,157 @@ export const cronDailyStats = inngest.createFunction(
 
 // ============================================================================
 // CRON 4: Learning Analysis (6am UTC)
-// Note: This just triggers the existing learningAnalysis workflow
+// Multi-Tenant: Triggers learning for each tenant
 // ============================================================================
 
 export const cronLearningAnalysis = inngest.createFunction(
   {
     id: 'cron-learning-analysis',
-    name: 'Daily Learning Analysis Trigger',
+    name: 'Daily Learning Analysis Trigger (All Tenants)',
     retries: 1,
   },
   { cron: '0 6 * * *' }, // 6am UTC daily
   async ({ step }) => {
-    console.log('[Cron Learning] Triggering daily learning analysis...')
+    console.log('[Cron Learning] Triggering daily learning analysis (multi-tenant)...')
 
-    const tenantId = process.env.TENANT_ID
-    if (!tenantId) {
-      throw new Error('Missing TENANT_ID environment variable')
-    }
-
-    // Trigger the learning analysis workflow
-    await step.run('trigger-learning', async () => {
-      await inngest.send({
-        name: 'learning.analyze-requested',
-        data: { tenant_id: tenantId },
-      })
+    // Get all tenants
+    const tenants = await step.run('get-tenants', async () => {
+      return getAllTenants()
     })
 
-    return { status: 'success', tenant_id: tenantId }
+    // Trigger learning for each tenant
+    await step.run('trigger-learning', async () => {
+      const events = tenants.map((tenant) => ({
+        name: 'learning.analyze-requested' as const,
+        data: { tenant_id: tenant.id },
+      }))
+      if (events.length) await inngest.send(events)
+    })
+
+    return { status: 'success', tenants_triggered: tenants.length }
+  }
+)
+
+// ============================================================================
+// CRON 5: Apollo Saved Searches (11am UTC)
+// Processes scheduled Apollo searches for all tenants
+// ============================================================================
+
+export const cronApolloSavedSearches = inngest.createFunction(
+  {
+    id: 'cron-apollo-saved-searches',
+    name: 'Apollo Saved Searches (All Tenants)',
+    retries: 2,
+  },
+  { cron: '0 11 * * *' }, // 11am UTC daily - after pixel/intent
+  async ({ step }) => {
+    console.log('[Cron Apollo] Starting Apollo saved searches...')
+
+    // Get all enabled saved searches with their tenant settings
+    const searches = await step.run('get-searches', async () => {
+      const { data, error } = await supabase
+        .from('apollo_saved_searches')
+        .select('*, tenants!inner(id, settings)')
+        .eq('enabled', true)
+        .not('schedule_cron', 'is', null)
+
+      if (error) {
+        console.error('[Cron Apollo] Failed to fetch saved searches:', error)
+        return []
+      }
+
+      return data || []
+    })
+
+    if (searches.length === 0) {
+      return { status: 'success', message: 'No scheduled searches', processed: 0 }
+    }
+
+    const results: Array<{
+      search_id: string
+      tenant_id: string
+      leads_found: number
+      status: string
+    }> = []
+
+    // Process each saved search
+    for (const search of searches) {
+      const tenant = search.tenants as unknown as { id: string; settings: TenantSettings }
+      const apiKey = tenant?.settings?.integrations?.apollo?.api_key
+
+      if (!apiKey) {
+        console.log(`[Cron Apollo] Skipping search ${search.id} - tenant has no Apollo API key`)
+        results.push({
+          search_id: search.id,
+          tenant_id: search.tenant_id,
+          leads_found: 0,
+          status: 'no_api_key',
+        })
+        continue
+      }
+
+      const result = await step.run(`search-${search.id}`, async () => {
+        try {
+          const apollo = createApolloClient(apiKey)
+          const searchResults = await apollo.searchPeople(search.search_params)
+
+          if (searchResults.leads.length === 0) {
+            return {
+              search_id: search.id,
+              tenant_id: search.tenant_id,
+              leads_found: 0,
+              status: 'no_results',
+            }
+          }
+
+          // Emit events for leads
+          const events = searchResults.leads
+            .filter((lead) => lead.email) // Only leads with emails
+            .map((lead) => ({
+              name: 'lead.ingested' as const,
+              data: normalizeApolloLead(lead, search.tenant_id, {
+                search_id: search.id,
+                search_name: search.name,
+              }),
+            }))
+
+          if (events.length) await inngest.send(events)
+
+          // Update last run metadata
+          await supabase
+            .from('apollo_saved_searches')
+            .update({
+              last_run_at: new Date().toISOString(),
+              last_result_count: searchResults.leads.length,
+            })
+            .eq('id', search.id)
+
+          return {
+            search_id: search.id,
+            tenant_id: search.tenant_id,
+            leads_found: events.length,
+            total_results: searchResults.leads.length,
+            status: 'success',
+          }
+        } catch (error) {
+          console.error(`[Cron Apollo] Error processing search ${search.id}:`, error)
+          return {
+            search_id: search.id,
+            tenant_id: search.tenant_id,
+            leads_found: 0,
+            status: 'error',
+            error: error instanceof Error ? error.message : 'Unknown error',
+          }
+        }
+      })
+
+      results.push(result)
+    }
+
+    return {
+      status: 'success',
+      searches_processed: results.length,
+      results,
+    }
   }
 )

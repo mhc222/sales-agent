@@ -81,9 +81,7 @@ export function Shell({ children }: ShellProps) {
 
         {/* Scrollable main content */}
         <main className="flex-1 overflow-y-auto">
-          <div className="p-6">
-            {children}
-          </div>
+          {children}
         </main>
       </div>
     </div>

@@ -3,6 +3,8 @@ import { qualifyNormalizedLead, type ExistingRecords } from '../src/agents/agent
 import { supabase, type Lead } from '../src/lib/supabase'
 import { normalizeLead, type NormalizedLead } from '../src/lib/data-normalizer'
 
+type LeadSource = 'pixel' | 'intent' | 'apollo'
+
 interface LeadIngestedEvent {
   data: {
     first_name: string
@@ -23,7 +25,26 @@ interface LeadIngestedEvent {
     company_description?: string
     intent_signal?: Record<string, unknown>
     tenant_id: string
+    source?: LeadSource
+    source_metadata?: Record<string, unknown>
   }
+}
+
+// Source priority: pixel > intent > apollo
+// Pixel indicates direct website engagement (highest intent)
+// Intent data is second-party data indicating interest
+// Apollo is cold outbound data (lowest priority)
+const SOURCE_PRIORITY: Record<LeadSource, number> = {
+  pixel: 3,
+  intent: 2,
+  apollo: 1,
+}
+
+function shouldUpdateSource(existingSource: string | null | undefined, newSource: LeadSource): boolean {
+  if (!existingSource) return true
+  const existingPriority = SOURCE_PRIORITY[existingSource as LeadSource] || 0
+  const newPriority = SOURCE_PRIORITY[newSource] || 0
+  return newPriority > existingPriority
 }
 
 export const qualificationAndResearch = inngest.createFunction(
@@ -35,12 +56,13 @@ export const qualificationAndResearch = inngest.createFunction(
   async ({ event, step }) => {
     const eventData = event.data as LeadIngestedEvent['data']
     const now = new Date().toISOString()
+    const source: LeadSource = eventData.source || 'pixel' // Default to pixel for backward compatibility
 
-    console.log(`[Workflow 1] Starting qualification for: ${eventData.email}`)
+    console.log(`[Workflow 1] Starting qualification for: ${eventData.email} (source: ${source})`)
 
     // Normalize incoming data at the start
-    const normalizedData = normalizeLead(eventData as Record<string, unknown>, 'pixel')
-    console.log(`[Workflow 1] Data normalized from pixel source`)
+    const normalizedData = normalizeLead(eventData as Record<string, unknown>, source)
+    console.log(`[Workflow 1] Data normalized from ${source} source`)
 
     // Step 1: Check if lead already exists by email
     const existingLead = await step.run('check-existing-lead', async () => {
@@ -59,8 +81,19 @@ export const qualificationAndResearch = inngest.createFunction(
 
     // Step 2: Create or update lead with visit tracking
     // Use upsert pattern to handle race conditions when multiple events arrive for same email
+    // Note: Visit count only increments for pixel source (actual website visits)
     const lead = await step.run('upsert-lead', async () => {
-      const updateLead = async (existingId: string, currentVisitCount: number) => {
+      const updateLead = async (existingId: string, existingLeadData: Lead) => {
+        // Only increment visit count for pixel source (website visits)
+        const newVisitCount = source === 'pixel'
+          ? (existingLeadData.visit_count || 0) + 1
+          : existingLeadData.visit_count || 0
+
+        // Determine if we should update the source (based on priority)
+        const newSource = shouldUpdateSource(existingLeadData.source, source)
+          ? source
+          : existingLeadData.source
+
         const { data, error } = await supabase
           .from('leads')
           .update({
@@ -79,7 +112,8 @@ export const qualificationAndResearch = inngest.createFunction(
             company_revenue: eventData.company_revenue,
             company_industry: eventData.company_industry,
             company_description: eventData.company_description,
-            visit_count: currentVisitCount + 1,
+            visit_count: newVisitCount,
+            source: newSource,
             last_seen_at: now,
             updated_at: now,
           })
@@ -91,7 +125,7 @@ export const qualificationAndResearch = inngest.createFunction(
       }
 
       if (existingLead) {
-        return await updateLead(existingLead.id, existingLead.visit_count || 1)
+        return await updateLead(existingLead.id, existingLead)
       }
 
       // Try to insert new lead
@@ -117,7 +151,8 @@ export const qualificationAndResearch = inngest.createFunction(
           company_description: eventData.company_description,
           intent_signal: eventData.intent_signal,
           status: 'ingested',
-          visit_count: 1,
+          source: source,
+          visit_count: source === 'pixel' ? 1 : 0, // Only count pixel visits
           first_seen_at: now,
           last_seen_at: now,
           in_ghl: false,
@@ -140,7 +175,7 @@ export const qualificationAndResearch = inngest.createFunction(
           .single()
 
         if (raceExisting) {
-          return await updateLead(raceExisting.id, raceExisting.visit_count || 1)
+          return await updateLead(raceExisting.id, raceExisting as Lead)
         }
       }
 
@@ -148,21 +183,38 @@ export const qualificationAndResearch = inngest.createFunction(
       return data as Lead
     })
 
-    // Step 3: Log pixel visit (every visit gets logged)
-    await step.run('log-pixel-visit', async () => {
-      const intentSignal = eventData.intent_signal || {}
+    // Step 3: Log pixel visit (only for pixel source - actual website visits)
+    if (source === 'pixel') {
+      await step.run('log-pixel-visit', async () => {
+        const intentSignal = eventData.intent_signal || {}
 
-      await supabase.from('pixel_visits').insert({
-        lead_id: lead.id,
-        tenant_id: lead.tenant_id,
-        page_visited: intentSignal.page_visited as string || null,
-        time_on_page: intentSignal.time_on_page as number || null,
-        event_type: intentSignal.event_type as string || null,
-        raw_event_data: intentSignal,
+        await supabase.from('pixel_visits').insert({
+          lead_id: lead.id,
+          tenant_id: lead.tenant_id,
+          page_visited: intentSignal.page_visited as string || null,
+          time_on_page: intentSignal.time_on_page as number || null,
+          event_type: intentSignal.event_type as string || null,
+          raw_event_data: intentSignal,
+        })
+
+        console.log(`[Workflow 1] Logged pixel visit #${lead.visit_count} for ${lead.email}`)
       })
+    } else {
+      // Log ingestion from other sources
+      await step.run('log-source-ingestion', async () => {
+        await supabase.from('engagement_log').insert({
+          lead_id: lead.id,
+          tenant_id: lead.tenant_id,
+          event_type: `lead.ingested.${source}`,
+          metadata: {
+            source,
+            source_metadata: eventData.source_metadata,
+          },
+        })
 
-      console.log(`[Workflow 1] Logged pixel visit #${lead.visit_count} for ${lead.email}`)
-    })
+        console.log(`[Workflow 1] Logged ${source} ingestion for ${lead.email}`)
+      })
+    }
 
     // Step 4: Check existing systems for lead history
     const existingRecords = await step.run('check-existing-systems', async () => {

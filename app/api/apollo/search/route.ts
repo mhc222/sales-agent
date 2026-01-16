@@ -1,12 +1,14 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@/src/lib/supabase-server'
+import { createClient, createServiceClient } from '@/src/lib/supabase-server'
 import { createApolloClient, INDUSTRY_IDS } from '@/src/lib/apollo'
 
 export async function POST(request: Request) {
   try {
     // Verify user is authenticated
     const supabase = await createClient()
-    const { data: { user } } = await supabase.auth.getUser()
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
 
     if (!user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -23,7 +25,9 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'No tenant found' }, { status: 400 })
     }
 
-    const settings = (userTenant.tenant as any).settings as Record<string, unknown>
+    const tenant = userTenant.tenant as unknown as { id: string; settings: Record<string, unknown> }
+    const tenantId = tenant.id
+    const settings = tenant.settings
     const integrations = settings?.integrations as Record<string, unknown>
     const apolloConfig = integrations?.apollo as Record<string, string>
     const apolloApiKey = apolloConfig?.api_key
@@ -34,7 +38,8 @@ export async function POST(request: Request) {
 
     // Parse search parameters
     const body = await request.json()
-    const { jobTitles, industry, locations, employeeRange, page = 1 } = body
+    const { jobTitles, industry, locations, employeeRange, page = 1, saveSearch, scheduleCron, nlQuery } =
+      body
 
     // Build Apollo search params
     const apollo = createApolloClient(apolloApiKey)
@@ -47,14 +52,41 @@ export async function POST(request: Request) {
       }
     }
 
-    const result = await apollo.searchPeople({
+    const searchParams = {
       jobTitles: jobTitles || [],
       industryIds,
       locations: locations || [],
       employeeRange: employeeRange || undefined,
+    }
+
+    const result = await apollo.searchPeople({
+      ...searchParams,
       page,
       perPage: 25,
     })
+
+    // Optionally save the search
+    if (saveSearch && saveSearch.name) {
+      const serviceClient = createServiceClient()
+
+      // Store the raw params for future searches
+      const savedSearchParams = {
+        jobTitles: jobTitles || [],
+        industry: industry || null,
+        locations: locations || [],
+        employeeRange: employeeRange || null,
+      }
+
+      await serviceClient.from('apollo_saved_searches').insert({
+        tenant_id: tenantId,
+        name: saveSearch.name,
+        description: saveSearch.description || null,
+        search_params: savedSearchParams,
+        nl_query: nlQuery || null,
+        schedule_cron: scheduleCron || null,
+        enabled: true,
+      })
+    }
 
     return NextResponse.json(result)
   } catch (error) {
