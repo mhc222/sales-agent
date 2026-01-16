@@ -1,0 +1,21 @@
+display_information:
+  name: JSB Sales Agent
+  description: Notifications from your AI sales agent - replies, reviews, daily stats
+  background_color: "#1e1b4b"
+
+features:
+  bot_user:
+    display_name: Sales Agent
+    always_online: true
+
+oauth_config:
+  scopes:
+    bot:
+      - incoming-webhook
+      - chat:write
+      - chat:write.public
+
+settings:
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false

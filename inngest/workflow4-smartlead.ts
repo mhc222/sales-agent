@@ -14,6 +14,10 @@ import {
   getCampaigns,
 } from '../src/lib/smartlead'
 import { trackSequenceDeployment } from '../src/lib/learning-tracker'
+import { deliverEmail, getTenantSettings, type EmailSequenceDelivery } from '../src/lib/delivery-router'
+
+// Feature flag for using the delivery router (multi-provider support)
+const USE_DELIVERY_ROUTER = process.env.USE_DELIVERY_ROUTER === 'true'
 
 // Default campaign ID - set this after creating the template campaign
 const DEFAULT_CAMPAIGN_ID = process.env.SMARTLEAD_CAMPAIGN_ID
@@ -110,22 +114,71 @@ export const smartleadDeployment = inngest.createFunction(
 
     console.log(`[Workflow 4] Custom fields prepared:`, Object.keys(customFields))
 
-    // Step 5: Add lead to Smartlead campaign
+    // Step 5: Add lead to email provider (via delivery router or direct Smartlead)
     const smartleadResult = await step.run('add-to-smartlead', async () => {
-      const result = await addLeadToCampaign(campaignId, {
-        email: lead.email,
-        first_name: lead.first_name,
-        last_name: lead.last_name,
-        company_name: lead.company_name,
-        linkedin_url: lead.linkedin_url || undefined,
-        custom_fields: customFields,
-      })
+      if (USE_DELIVERY_ROUTER) {
+        // Use delivery router for multi-provider support
+        const thread1 = sequence.thread_1 as { subject: string; emails: Array<{ body: string }> }
+        const thread2 = sequence.thread_2 as { subject: string; emails: Array<{ body: string }> }
 
-      if (!result.ok) {
-        throw new Error(`Smartlead API error: ${result.message}`)
+        // Build sequence in delivery router format
+        const allEmails = [
+          ...thread1.emails.map((e, i) => ({
+            emailNumber: i + 1,
+            day: i * 2, // Approximate days
+            subject: i === 0 ? thread1.subject : `Re: ${thread1.subject}`,
+            body: e.body,
+          })),
+          ...thread2.emails.map((e, i) => ({
+            emailNumber: thread1.emails.length + i + 1,
+            day: 7 + i * 3, // Approximate days for thread 2
+            subject: i === 0 ? thread2.subject : `Re: ${thread2.subject}`,
+            body: e.body,
+          })),
+        ]
+
+        const delivery: EmailSequenceDelivery = {
+          lead: {
+            email: lead.email,
+            first_name: lead.first_name,
+            last_name: lead.last_name,
+            company_name: lead.company_name,
+            linkedin_url: lead.linkedin_url || undefined,
+          },
+          sequence: allEmails,
+          campaignId: campaignId,
+        }
+
+        const routerResult = await deliverEmail(lead.tenant_id, delivery)
+
+        if (!routerResult.success) {
+          throw new Error(`Delivery error (${routerResult.provider}): ${routerResult.error}`)
+        }
+
+        // Extract lead ID from provider response if available
+        const providerResponse = routerResult.providerResponse as { id?: string } | undefined
+        return {
+          ok: true,
+          id: providerResponse?.id,
+          provider: routerResult.provider,
+        }
+      } else {
+        // Direct Smartlead integration (current behavior)
+        const result = await addLeadToCampaign(campaignId, {
+          email: lead.email,
+          first_name: lead.first_name,
+          last_name: lead.last_name,
+          company_name: lead.company_name,
+          linkedin_url: lead.linkedin_url || undefined,
+          custom_fields: customFields,
+        })
+
+        if (!result.ok) {
+          throw new Error(`Smartlead API error: ${result.message}`)
+        }
+
+        return { ...result, provider: 'smartlead' }
       }
-
-      return result
     })
 
     console.log(`[Workflow 4] Lead added to Smartlead:`, smartleadResult)

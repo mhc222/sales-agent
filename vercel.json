@@ -3,6 +3,10 @@
   "framework": "nextjs",
   "crons": [
     {
+      "path": "/api/cron-daily-stats",
+      "schedule": "0 8 * * *"
+    },
+    {
       "path": "/api/cron-ingest-daily-intent",
       "schedule": "0 10 * * *"
     },

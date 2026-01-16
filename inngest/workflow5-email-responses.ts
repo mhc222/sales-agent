@@ -13,6 +13,7 @@
 import { inngest } from './client'
 import { supabase } from '../src/lib/supabase'
 import { classifyReply, type ClassificationResult } from '../src/lib/reply-classifier'
+import { forwardPositiveReply, isOutlookForwardingConfigured } from '../src/lib/outlook-forwarder'
 
 // ============================================================================
 // REPLY CLASSIFICATION WORKFLOW
@@ -559,7 +560,45 @@ export const interestedNotification = inngest.createFunction(
       email?: string
     }
 
-    console.log(`[Interested] Sending email notification for ${lead_name}`)
+    console.log(`[Interested] Processing positive reply from ${lead_name}`)
+
+    // Fetch the original reply subject from email_responses
+    const responseDetails = await step.run('fetch-response-details', async () => {
+      const { data } = await supabase
+        .from('email_responses')
+        .select('reply_subject')
+        .eq('id', response_id)
+        .single()
+      return data
+    })
+
+    // Forward to Jordan's inbox via Outlook (so he can reply directly)
+    const jordanEmail = process.env.JORDAN_EMAIL || 'jordan@jsbmedia.io'
+
+    await step.run('forward-to-jordan', async () => {
+      if (!isOutlookForwardingConfigured()) {
+        console.log('[Interested] Outlook forwarding not configured, skipping')
+        return { forwarded: false, reason: 'not_configured' }
+      }
+
+      const success = await forwardPositiveReply({
+        toEmail: jordanEmail,
+        fromName: lead_name || 'Unknown',
+        fromEmail: email || 'unknown@email.com',
+        subject: responseDetails?.reply_subject || 'Sales Inquiry',
+        replyBody: reply_text,
+        companyName: company_name || 'Unknown Company',
+        leadId: lead_id,
+      })
+
+      if (success) {
+        console.log(`[Interested] Forwarded reply to ${jordanEmail}`)
+        return { forwarded: true }
+      } else {
+        console.error('[Interested] Failed to forward reply to Jordan')
+        return { forwarded: false, reason: 'send_failed' }
+      }
+    })
 
     // Send email notification via Resend
     await step.run('notify-email-interested', async () => {

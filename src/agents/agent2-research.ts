@@ -115,6 +115,24 @@ interface RawResearchData {
 }
 
 /**
+ * Fetch fundamentals RAG documents (global, tenant_id IS NULL)
+ */
+async function fetchFundamentals(ragTypes: string[]): Promise<string> {
+  const { data: docs, error } = await supabase
+    .from('rag_documents')
+    .select('content, rag_type, metadata')
+    .is('tenant_id', null)
+    .in('rag_type', ragTypes)
+
+  if (error) {
+    console.error('[Agent 2] Error fetching fundamentals:', error)
+    return ''
+  }
+
+  return docs?.map((d) => d.content).join('\n\n') || ''
+}
+
+/**
  * Main research function - synthesizes all data sources
  */
 export async function researchLead(
@@ -133,6 +151,9 @@ export async function researchLead(
   if (ragError) {
     console.error('[Agent 2] Error fetching RAG documents:', ragError)
   }
+
+  // Fetch fundamentals for intent signal guidance
+  const intentSignalFundamentals = await fetchFundamentals(['fundamental_intent'])
 
   // Organize RAG content
   const personaDocs =
@@ -153,8 +174,8 @@ export async function researchLead(
       .map((d) => d.content)
       .join('\n\n') || ''
 
-  // Build the research synthesis prompt
-  const prompt = buildResearchPrompt(lead, rawData, personaDocs, icpDocs, sharedDocs)
+  // Build the research synthesis prompt (with fundamentals for intent signal guidance)
+  const prompt = buildResearchPrompt(lead, rawData, personaDocs, icpDocs, sharedDocs, intentSignalFundamentals)
 
   // Call Claude for synthesis
   const message = await anthropic.messages.create({
@@ -264,7 +285,8 @@ function buildResearchPrompt(
   rawData: RawResearchData,
   personaDocs: string,
   icpDocs: string,
-  sharedDocs: string
+  sharedDocs: string,
+  intentSignalFundamentals: string = ''
 ): string {
   const linkedinProfileStr = rawData.linkedinProfile
     ? JSON.stringify(rawData.linkedinProfile, null, 2)
@@ -381,6 +403,7 @@ These are HIGHER value triggers than generic hiring/funding for intent leads.`
     sharedDocs,
     icpDocs,
     personaDocs,
+    intentSignalFundamentals: intentSignalFundamentals || 'No intent signal fundamentals available.',
     firstName: lead.first_name,
     lastName: lead.last_name,
     email: lead.email,

@@ -20,6 +20,9 @@ Return a list of items, stacked ranked based on:
 === BUYER PERSONAS ===
 {{personaDocs}}
 
+=== INTENT SIGNAL FUNDAMENTALS ===
+{{intentSignalFundamentals}}
+
 === TARGET LEAD ===
 Person:
 - Name: {{firstName}} {{lastName}}

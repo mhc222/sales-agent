@@ -10,10 +10,30 @@ import { loadPrompt } from '../lib/prompt-loader'
 import type { ContextProfile } from './context-profile-builder'
 import { getLearnedGuidelines } from '../lib/pattern-promoter'
 import { loadDynamicPrompt, recordPromptUsage, type PromptContext } from '../lib/prompt-manager'
+import { loadCorrections, type CorrectionsContext } from '../lib/corrections-loader'
+import { getGlobalGuidelines } from '../lib/correction-analyzer'
 
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 })
+
+/**
+ * Fetch fundamentals RAG documents (global, tenant_id IS NULL)
+ */
+async function fetchFundamentals(ragTypes: string[]): Promise<string> {
+  const { data: docs, error } = await supabase
+    .from('rag_documents')
+    .select('content, rag_type, metadata')
+    .is('tenant_id', null)
+    .in('rag_type', ragTypes)
+
+  if (error) {
+    console.error('[Agent 3] Error fetching fundamentals:', error)
+    return ''
+  }
+
+  return docs?.map((d) => d.content).join('\n\n') || ''
+}
 
 // Types
 export interface EmailSequence {
@@ -249,6 +269,22 @@ export async function writeSequenceWithProfile(input: ProfileWriterInput): Promi
   console.log(`[Agent 3] Relationship type: ${research.relationship.type}`)
   console.log(`[Agent 3] Profile quality score: ${contextProfile.metadata.dataQualityScore}`)
 
+  // Load human corrections for this company (if any)
+  const corrections = await loadCorrections(
+    lead.tenant_id,
+    lead.company_domain || '',
+    lead.company_name
+  )
+  if (corrections.hasCorrections) {
+    console.log(`[Agent 3] Loaded ${corrections.corrections.length} corrections for ${lead.company_name}`)
+  }
+
+  // Load global guidelines learned from corrections (applies to ALL leads)
+  const globalGuidelines = await getGlobalGuidelines(lead.tenant_id)
+  if (globalGuidelines) {
+    console.log(`[Agent 3] Loaded global guidelines from correction patterns`)
+  }
+
   // Fetch RAG documents - messaging guidelines and anti-patterns
   const { data: ragDocs, error: ragError } = await supabase
     .from('rag_documents')
@@ -277,7 +313,9 @@ export async function writeSequenceWithProfile(input: ProfileWriterInput): Promi
     lead.tenant_id,
     contextProfile,
     messagingRag,
-    antiPatterns
+    antiPatterns,
+    corrections,
+    globalGuidelines
   )
   console.log(`[Agent 3] Using prompt version: ${promptVersionId}${abTestId ? ` (A/B test: ${abTestId})` : ''}`)
 
@@ -414,6 +452,16 @@ export async function writeSequenceWithRevisions(input: RevisionWriterInput): Pr
   console.log(`[Agent 3] Writing REVISED sequence for: ${lead.email}`)
   console.log(`[Agent 3] Revision instructions provided: ${revisionInstructions ? 'Yes' : 'No'}`)
 
+  // Load human corrections for this company (if any)
+  const corrections = await loadCorrections(
+    lead.tenant_id,
+    lead.company_domain || '',
+    lead.company_name
+  )
+  if (corrections.hasCorrections) {
+    console.log(`[Agent 3] Loaded ${corrections.corrections.length} corrections for ${lead.company_name}`)
+  }
+
   // Fetch RAG documents - messaging guidelines and anti-patterns
   const { data: ragDocs, error: ragError } = await supabase
     .from('rag_documents')
@@ -440,11 +488,16 @@ export async function writeSequenceWithRevisions(input: RevisionWriterInput): Pr
   // Fetch learned patterns from the learning system
   const learnedPatterns = await getLearnedGuidelines(lead.tenant_id)
 
+  // Append corrections to anti-patterns if we have them
+  const fullAntiPatterns = corrections.hasCorrections
+    ? `${antiPatterns}\n\n${corrections.formattedForPrompt}`
+    : antiPatterns
+
   // Build the prompt with revision instructions and learned patterns
   const prompt = build955WriterPromptWithRevisions(
     contextProfile,
     messagingRag,
-    antiPatterns,
+    fullAntiPatterns,
     revisionInstructions,
     previousSequence,
     learnedPatterns
@@ -546,13 +599,35 @@ async function build955WriterPromptDynamic(
   tenantId: string,
   profile: ContextProfile,
   messagingRag: string,
-  antiPatterns: string
+  antiPatterns: string,
+  corrections?: CorrectionsContext,
+  globalGuidelines?: string
 ): Promise<{ content: string; versionId: string; abTestId: string | null }> {
   // Build context for dynamic section injection
   const context: PromptContext = {
     industry: profile.companyIntelligence.industry,
     seniority: profile.leadSummary.seniorityLevel,
     channel: 'email',
+  }
+
+  // Fetch fundamentals for email best practices and frameworks
+  const [emailBestPractices, tipsFramework] = await Promise.all([
+    fetchFundamentals(['fundamental_email']),
+    fetchFundamentals(['fundamental_framework']),
+  ])
+  console.log(`[Agent 3] Loaded fundamentals: email=${emailBestPractices.length > 0}, framework=${tipsFramework.length > 0}`)
+
+  // Build full anti-patterns with corrections and global guidelines
+  let fullAntiPatterns = antiPatterns
+
+  // Add global guidelines first (applies to ALL leads)
+  if (globalGuidelines) {
+    fullAntiPatterns = `${fullAntiPatterns}\n\n${globalGuidelines}`
+  }
+
+  // Add company-specific corrections (applies only to this company)
+  if (corrections?.hasCorrections) {
+    fullAntiPatterns = `${fullAntiPatterns}\n\n${corrections.formattedForPrompt}`
   }
 
   try {
@@ -562,7 +637,9 @@ async function build955WriterPromptDynamic(
       {
         contextProfile: JSON.stringify(profile, null, 2),
         messagingRag: messagingRag || 'No specific messaging guidelines available.',
-        antiPatterns: antiPatterns,
+        antiPatterns: fullAntiPatterns,
+        emailBestPractices: emailBestPractices || 'No email best practices fundamentals available.',
+        tipsFramework: tipsFramework || 'No TIPS framework fundamentals available.',
       },
       context
     )
@@ -574,8 +651,8 @@ async function build955WriterPromptDynamic(
     }
   } catch (err) {
     console.log('[Agent 3] Dynamic prompt loading failed, falling back to static:', err)
-    // Fallback to static prompt loading
-    const staticPrompt = build955WriterPromptStatic(profile, messagingRag, antiPatterns)
+    // Fallback to static prompt loading (with fundamentals)
+    const staticPrompt = build955WriterPromptStatic(profile, messagingRag, fullAntiPatterns, undefined, emailBestPractices, tipsFramework)
     return {
       content: staticPrompt,
       versionId: `static-agent3-writer-${Date.now()}`,
@@ -591,12 +668,16 @@ function build955WriterPromptStatic(
   profile: ContextProfile,
   messagingRag: string,
   antiPatterns: string,
-  learnedPatterns?: string
+  learnedPatterns?: string,
+  emailBestPractices?: string,
+  tipsFramework?: string
 ): string {
   const basePrompt = loadPrompt('agent3-writer', {
     contextProfile: JSON.stringify(profile, null, 2),
     messagingRag: messagingRag || 'No specific messaging guidelines available.',
     antiPatterns: antiPatterns,
+    emailBestPractices: emailBestPractices || 'No email best practices fundamentals available.',
+    tipsFramework: tipsFramework || 'No TIPS framework fundamentals available.',
   })
 
   // Append learned patterns section if available

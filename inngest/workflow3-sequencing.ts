@@ -12,6 +12,7 @@ import { buildContextProfile, type ResearchRecord, type EnhancedResearchData } f
 import { normalizeLead, type NormalizedLead } from '../src/lib/data-normalizer'
 import type { ResearchResult } from '../src/agents/agent2-research'
 import { reviewEmailSequence, storeReviewResult, buildResearchSummary } from '../src/agents/agent4-reviewer'
+import { notifyHumanReviewNeeded, notifySequenceApproved } from '../src/lib/slack-notifier'
 
 interface ResearchCompleteEvent {
   data: {
@@ -262,6 +263,14 @@ export const sequencingPipeline = inngest.createFunction(
             context_profile_quality: contextProfile.metadata.dataQualityScore,
           },
         })
+
+        // Send Slack notification
+        await notifySequenceApproved({
+          sequenceId: savedSequence.id,
+          leadName: `${lead.first_name || ''} ${lead.last_name || ''}`.trim() || lead.email,
+          companyName: lead.company_name || 'Unknown Company',
+          approvedBy: 'Agent 4 (Reviewer)',
+        })
       })
 
       // Trigger deployment event
@@ -342,7 +351,15 @@ export const sequencingPipeline = inngest.createFunction(
           },
         })
 
-        // TODO: Send Slack notification (Phase 4)
+        // Send Slack notification
+        await notifyHumanReviewNeeded({
+          sequenceId: savedSequence.id,
+          leadName: `${lead.first_name || ''} ${lead.last_name || ''}`.trim() || lead.email,
+          companyName: lead.company_name || 'Unknown Company',
+          reason: reviewResult.humanReviewReason || `Review decision: ${reviewResult.decision} (score: ${reviewResult.overallScore})`,
+          reviewerQuestions: reviewResult.sequenceLevelIssues?.slice(0, 3),
+        })
+
         console.log(`[Workflow 3] Lead ${lead.id} needs HUMAN REVIEW: ${reviewResult.humanReviewReason}`)
       })
 

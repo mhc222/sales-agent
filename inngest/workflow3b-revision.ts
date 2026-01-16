@@ -10,6 +10,7 @@ import { supabase, type Lead } from '../src/lib/supabase'
 import { writeSequenceWithRevisions } from '../src/agents/agent3-writer'
 import { buildContextProfile, type ResearchRecord } from '../src/agents/context-profile-builder'
 import { normalizeLead } from '../src/lib/data-normalizer'
+import { notifyHumanReviewNeeded, notifySequenceApproved } from '../src/lib/slack-notifier'
 import type { ResearchResult } from '../src/agents/agent2-research'
 
 interface RevisionNeededEvent {
@@ -339,6 +340,14 @@ export const reviewRevisedSequence = inngest.createFunction(
             revision_attempt: attempt,
           },
         })
+
+        // Send Slack notification for approval
+        await notifySequenceApproved({
+          sequenceId: sequence_id,
+          leadName: `${lead.first_name || ''} ${lead.last_name || ''}`.trim() || lead.email,
+          companyName: lead.company_name || 'Unknown Company',
+          approvedBy: 'Agent 4 (Reviewer)',
+        })
       })
 
       await step.sendEvent('sequence-approved', {
@@ -403,6 +412,15 @@ export const reviewRevisedSequence = inngest.createFunction(
             human_review_reason: reviewResult.humanReviewReason,
             revision_attempts: attempt + 1,
           },
+        })
+
+        // Send Slack notification
+        await notifyHumanReviewNeeded({
+          sequenceId: sequence_id,
+          leadName: `${lead.first_name || ''} ${lead.last_name || ''}`.trim() || lead.email,
+          companyName: lead.company_name || 'Unknown Company',
+          reason: reviewResult.humanReviewReason || `Failed review after ${attempt + 1} attempts (score: ${reviewResult.overallScore})`,
+          reviewerQuestions: reviewResult.sequenceLevelIssues?.slice(0, 3),
         })
 
         console.log(`[Workflow 3c] Lead ${lead_id} needs HUMAN REVIEW after ${attempt + 1} attempts`)

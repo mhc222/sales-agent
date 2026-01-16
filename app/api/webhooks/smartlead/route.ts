@@ -6,6 +6,7 @@ import {
   findOutreachEventBySmartlead,
   getDaysSinceFirstEmail,
 } from '../../../../src/lib/learning-tracker'
+import { notifyEmailReply } from '../../../../src/lib/slack-notifier'
 
 /**
  * Smartlead Webhook Handler
@@ -318,6 +319,19 @@ async function handleEmailReply(
       })
     }
   }
+
+  // Send real-time Slack notification with direct link to conversation
+  await notifyEmailReply({
+    leadId: lead?.id,
+    leadName: lead ? `${lead.first_name} ${lead.last_name}`.trim() : payload.email || 'Unknown',
+    companyName: lead?.company_name || 'Unknown Company',
+    email: payload.email || 'unknown',
+    replySubject: payload.reply_subject,
+    replyPreview: payload.reply_text || '(no content)',
+    sentiment: 'unknown', // Will be updated after classification
+    smartleadLeadId: payload.lead_id,
+    smartleadCampaignId: payload.campaign_id,
+  })
 
   // Emit event for classification workflow
   await inngest.send({

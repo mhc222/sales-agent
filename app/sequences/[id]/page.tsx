@@ -201,6 +201,12 @@ export default function SequenceDetailPage() {
   const [isEditing, setIsEditing] = useState(false)
   const [editedContent, setEditedContent] = useState<EditedContent>({})
   const [saving, setSaving] = useState(false)
+  const [feedback, setFeedback] = useState('')
+  const [learnedInfo, setLearnedInfo] = useState<{
+    correctionsDetected: number
+    corrections: Array<{ incorrectContent: string; correctContent: string; context: string }>
+  } | null>(null)
+  const [regenerating, setRegenerating] = useState(false)
 
   useEffect(() => {
     fetchSequence()
@@ -292,23 +298,64 @@ export default function SequenceDetailPage() {
   // Save edits
   async function saveEdits() {
     setSaving(true)
+    setLearnedInfo(null)
     try {
       const res = await fetch(`/api/sequences/${params.id}/content`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(editedContent),
+        body: JSON.stringify({
+          ...editedContent,
+          feedback: feedback || undefined,
+          learnFromChanges: true,
+        }),
       })
 
       if (!res.ok) throw new Error('Failed to save changes')
 
+      const result = await res.json()
+
+      // Show learned corrections if any were detected
+      if (result.learned?.correctionsDetected > 0) {
+        setLearnedInfo({
+          correctionsDetected: result.learned.correctionsDetected,
+          corrections: result.learned.corrections,
+        })
+      }
+
       // Refresh data and exit edit mode
       await fetchSequence()
       setEditedContent({})
+      setFeedback('')
       setIsEditing(false)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save changes')
     } finally {
       setSaving(false)
+    }
+  }
+
+  // Regenerate sequence with corrections
+  async function regenerateSequence() {
+    if (!data?.lead) return
+    setRegenerating(true)
+    try {
+      const res = await fetch(`/api/leads/${data.lead.id}/rerun`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          skipQualification: true,
+          skipResearch: true,
+        }),
+      })
+
+      if (!res.ok) throw new Error('Failed to trigger regeneration')
+
+      // Show success and redirect to lead page
+      router.push(`/leads/${data.lead.id}`)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to regenerate')
+    } finally {
+      setRegenerating(false)
     }
   }
 
@@ -411,6 +458,49 @@ export default function SequenceDetailPage() {
           )}
         </div>
       </div>
+
+      {/* Learned Corrections Notification */}
+      {learnedInfo && learnedInfo.correctionsDetected > 0 && (
+        <div className="bg-purple-500/10 border border-purple-500/20 rounded-lg p-4">
+          <div className="flex items-start gap-3">
+            <svg className="w-6 h-6 text-purple-400 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M4.26 10.147a60.436 60.436 0 00-.491 6.347A48.627 48.627 0 0112 20.904a48.627 48.627 0 018.232-4.41 60.46 60.46 0 00-.491-6.347m-15.482 0a50.57 50.57 0 00-2.658-.813A59.905 59.905 0 0112 3.493a59.902 59.902 0 0110.399 5.84c-.896.248-1.783.52-2.658.814m-15.482 0A50.697 50.697 0 0112 13.489a50.702 50.702 0 017.74-3.342M6.75 15a.75.75 0 100-1.5.75.75 0 000 1.5zm0 0v-3.675A55.378 55.378 0 0112 8.443m-7.007 11.55A5.981 5.981 0 006.75 15.75v-1.5" />
+            </svg>
+            <div className="flex-1">
+              <h3 className="text-purple-400 font-medium">
+                Learned {learnedInfo.correctionsDetected} correction{learnedInfo.correctionsDetected > 1 ? 's' : ''} from your edits!
+              </h3>
+              <p className="text-sm text-gray-400 mt-1">
+                These will be applied to all future emails for this company.
+              </p>
+              <div className="mt-3 space-y-2">
+                {learnedInfo.corrections.map((c, i) => (
+                  <div key={i} className="flex items-start gap-2 text-sm">
+                    <span className="text-red-400 line-through">{c.incorrectContent}</span>
+                    <span className="text-gray-500">→</span>
+                    <span className="text-green-400">{c.correctContent}</span>
+                  </div>
+                ))}
+              </div>
+              <div className="flex gap-3 mt-4">
+                <button
+                  onClick={() => setLearnedInfo(null)}
+                  className="px-3 py-1.5 text-sm text-gray-400 hover:text-white transition-colors"
+                >
+                  Dismiss
+                </button>
+                <button
+                  onClick={regenerateSequence}
+                  disabled={regenerating}
+                  className="px-3 py-1.5 text-sm bg-purple-500/20 text-purple-400 rounded-md hover:bg-purple-500/30 transition-colors disabled:opacity-50"
+                >
+                  {regenerating ? 'Regenerating...' : 'Regenerate with corrections'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Lead Info Card */}
       {lead && (
@@ -554,6 +644,36 @@ export default function SequenceDetailPage() {
           ) : (
             <div className="bg-jsb-navy-light border border-jsb-navy-lighter rounded-lg p-8 text-center">
               <p className="text-gray-400">No emails in this thread</p>
+            </div>
+          )}
+
+          {/* Feedback Section - Shows when editing */}
+          {isEditing && (
+            <div className="bg-jsb-navy-light border border-jsb-navy-lighter rounded-lg p-4">
+              <div className="flex items-center gap-2 mb-3">
+                <svg className="w-5 h-5 text-purple-400" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 8.25h9m-9 3H12m-9.75 1.51c0 1.6 1.123 2.994 2.707 3.227 1.129.166 2.27.293 3.423.379.35.026.67.21.865.501L12 21l2.755-4.133a1.14 1.14 0 01.865-.501 48.172 48.172 0 003.423-.379c1.584-.233 2.707-1.626 2.707-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018z" />
+                </svg>
+                <h3 className="text-sm font-medium text-white">Feedback (Optional)</h3>
+              </div>
+              <p className="text-xs text-gray-400 mb-2">
+                Explain what was wrong or what you changed. The system will auto-detect corrections from your edits, but explicit feedback helps improve future emails.
+              </p>
+              <textarea
+                value={feedback}
+                onChange={(e) => setFeedback(e.target.value)}
+                placeholder="e.g., 'They're a marketing agency, not a travel agency' or 'Too salesy, tone down the urgency'"
+                className="w-full px-3 py-2 bg-jsb-navy border border-jsb-navy-lighter rounded-md text-sm text-gray-300 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-500 resize-none"
+                rows={3}
+              />
+              <div className="mt-3 flex items-start gap-2 text-xs text-gray-500">
+                <svg className="w-4 h-4 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
+                </svg>
+                <span>
+                  Your edits will be analyzed to automatically detect corrections. High-value corrections (facts, business type) are promoted to global guidelines.
+                </span>
+              </div>
             </div>
           )}
         </div>

@@ -36,6 +36,12 @@ INPUT DATA
 ### Learned Patterns (Data-Driven)
 {{learnedPatterns}}
 
+### Email Best Practices (Fundamentals)
+{{emailBestPractices}}
+
+### T.I.P.S Framework (Fundamentals)
+{{tipsFramework}}
+
 ================================================================================
 OUTREACH GUIDANCE (Use This!)
 ================================================================================
