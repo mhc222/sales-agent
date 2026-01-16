@@ -275,12 +275,32 @@ export function normalizeLinkedInPosts(rawPosts: unknown): LinkedInPost[] {
   return rawPosts
     .map((post: unknown) => {
       const p = post as Record<string, unknown>
+      // Handle nested structures from Apify
+      const postedAt = p.posted_at as Record<string, unknown> | undefined
+      const stats = p.stats as Record<string, unknown> | undefined
+
       return {
         text: (p.text as string) || (p.post_text as string) || (p.content as string) || '',
-        date: (p.date as string) || (p.posted_date as string) || (p.timestamp as string) || new Date().toISOString(),
-        likes: (p.likes as number) || (p.like_count as number) || 0,
-        comments: (p.comments as number) || (p.comment_count as number) || 0,
-        shares: (p.shares as number) || (p.share_count as number) || 0,
+        // Handle Apify's posted_at.date structure
+        date: (p.date as string) ||
+          (postedAt?.date as string) ||
+          (p.posted_date as string) ||
+          (p.timestamp as string) ||
+          new Date().toISOString(),
+        // Handle Apify's stats.like structure
+        likes: (p.likes as number) ||
+          (stats?.like as number) ||
+          (stats?.total_reactions as number) ||
+          (p.like_count as number) ||
+          0,
+        comments: (p.comments as number) ||
+          (stats?.comments as number) ||
+          (p.comment_count as number) ||
+          0,
+        shares: (p.shares as number) ||
+          (stats?.reposts as number) ||
+          (p.share_count as number) ||
+          0,
         url: (p.url as string) || (p.post_url as string) || undefined,
       }
     })

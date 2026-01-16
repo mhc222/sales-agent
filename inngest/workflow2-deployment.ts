@@ -18,6 +18,7 @@ import {
 import { researchCompany, type PerplexityResearch } from '../src/lib/perplexity'
 import {
   analyzeLinkedInPostsEnhanced,
+  normalizeLinkedInPosts,
   type EnhancedLinkedInAnalysis,
   type PainSignal,
   type ConversationHook,
@@ -142,13 +143,9 @@ export const researchPipeline = inngest.createFunction(
         personalLinkedInAnalysis = await step.run('waterfall-1-analyze-enhanced', async () => {
           console.log(`[Waterfall] Step 1: Analyzing personal LinkedIn posts (enhanced)...`)
 
-          // Extract posts array from profile data
-          const posts = (linkedinProfile?.posts || []) as Array<{
-            text: string
-            date?: string
-            likes?: number
-            comments?: number
-          }>
+          // Extract and normalize posts array from profile data
+          const rawPosts = linkedinProfile?.posts || []
+          const posts = normalizeLinkedInPosts(rawPosts)
 
           if (posts.length === 0) {
             console.log(`[Waterfall] Step 1: No posts found in profile data`)
@@ -194,13 +191,9 @@ export const researchPipeline = inngest.createFunction(
         companyLinkedInAnalysis = await step.run('waterfall-2-analyze-enhanced', async () => {
           console.log(`[Waterfall] Step 2: Analyzing company LinkedIn posts (enhanced)...`)
 
-          // Extract posts array from company data
-          const posts = (linkedinCompany?.posts || []) as Array<{
-            text: string
-            date?: string
-            likes?: number
-            comments?: number
-          }>
+          // Extract and normalize posts array from company data
+          const rawPosts = linkedinCompany?.posts || []
+          const posts = normalizeLinkedInPosts(rawPosts)
 
           if (posts.length === 0) {
             console.log(`[Waterfall] Step 2: No posts found in company data`)
@@ -355,10 +348,10 @@ export const researchPipeline = inngest.createFunction(
               query: `${lead.company_name} + ${lead.first_name} ${lead.last_name}`,
             }
           : null,
-        // New enhanced data
+        // New enhanced data - normalized posts from both sources
         linkedinPosts: [
-          ...((linkedinProfile?.posts || []) as Array<{ text: string; date?: string; likes?: number; comments?: number }>),
-          ...((linkedinCompany?.posts || []) as Array<{ text: string; date?: string; likes?: number; comments?: number }>),
+          ...normalizeLinkedInPosts(linkedinProfile?.posts || []),
+          ...normalizeLinkedInPosts(linkedinCompany?.posts || []),
         ],
         intentData: {
           companyDomain: lead.company_domain || '',
