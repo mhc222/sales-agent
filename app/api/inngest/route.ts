@@ -13,6 +13,12 @@ import {
   ghlUnsubscribeSync,
 } from '../../../inngest/workflow5-email-responses'
 import { learningAnalysis, manualLearningAnalysis } from '../../../inngest/workflow6-learning'
+import {
+  cronDailyIntent,
+  cronDailyVisitors,
+  cronDailyStats,
+  cronLearningAnalysis,
+} from '../../../inngest/cron-jobs'
 
 // Determine if we're in development mode
 const isDev = process.env.NODE_ENV === 'development'
@@ -21,6 +27,7 @@ const isDev = process.env.NODE_ENV === 'development'
 export const { GET, POST, PUT } = serve({
   client: inngest,
   functions: [
+    // Event-driven workflows
     intentQualification,         // Workflow 0: Intent Data Qualification
     qualificationAndResearch,    // Workflow 1: Pixel Visitor Qualification
     researchPipeline,            // Workflow 2: Research & Deployment
@@ -33,8 +40,13 @@ export const { GET, POST, PUT } = serve({
     highEngagementHandler,       // Workflow 5: High engagement notifications
     interestedNotification,      // Workflow 5: Interested lead Slack alerts
     ghlUnsubscribeSync,          // Workflow 5: GHL unsubscribe sync
-    learningAnalysis,            // Workflow 6: Daily Learning Analysis (cron)
+    learningAnalysis,            // Workflow 6: Daily Learning Analysis
     manualLearningAnalysis,      // Workflow 6: Manual Learning Analysis (event)
+    // Scheduled cron jobs
+    cronDailyIntent,             // Cron: Daily intent data ingestion (10am UTC)
+    cronDailyVisitors,           // Cron: Daily pixel visitor ingestion (9am UTC)
+    cronDailyStats,              // Cron: Daily stats & Slack summary (8am UTC)
+    cronLearningAnalysis,        // Cron: Trigger learning analysis (6am UTC)
   ],
   // In dev mode, don't use signing key (handled by Inngest dev server)
   ...(isDev ? {} : {
