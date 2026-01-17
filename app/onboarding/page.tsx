@@ -4,23 +4,58 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { jsb, cn } from '@/lib/styles'
 import CompanyStep from '@/components/onboarding/CompanyStep'
+import ICPStep from '@/components/onboarding/ICPStep'
+import ChannelsStep from '@/components/onboarding/ChannelsStep'
 import EmailProviderStep from '@/components/onboarding/EmailProviderStep'
 import ApolloStep from '@/components/onboarding/ApolloStep'
+import AudienceLabStep from '@/components/onboarding/AudienceLabStep'
 import LinkedInStep from '@/components/onboarding/LinkedInStep'
 import DNCStep from '@/components/onboarding/DNCStep'
+
+import type {
+  AccountCriteria,
+  ICPPersona,
+  ICPTrigger,
+} from '@/src/lib/tenant-settings'
 
 type OnboardingData = {
   company: {
     companyName: string
     yourName: string
+    websiteUrl: string
+  }
+  icp: {
+    // AI-generated data
+    accountCriteria: AccountCriteria | null
+    personas: ICPPersona[]
+    triggers: ICPTrigger[]
+    // Research state
+    researchStatus: 'idle' | 'loading' | 'complete' | 'error'
+    researchError?: string
+    // Optional market research (unstructured text)
+    marketResearch: string
+  }
+  channels: {
+    outreachChannels: ('email' | 'linkedin')[]
+    dataSources: ('apollo' | 'audiencelab')[]
   }
   emailProvider: {
-    provider: 'smartlead' | 'instantly' | ''
+    provider: 'smartlead' | 'nureply' | 'instantly' | ''
     apiKey: string
     campaignId: string
   }
   apollo: {
     apiKey: string
+  }
+  audienceLab: {
+    sources: Array<{
+      name: string
+      apiUrl: string
+      apiKey: string
+      type: 'pixel' | 'intent'
+      enabled: boolean
+    }>
+    skip: boolean
   }
   linkedIn: {
     provider: 'heyreach' | ''
@@ -33,13 +68,35 @@ type OnboardingData = {
   }
 }
 
-const steps = [
-  { id: 'company', title: 'Company' },
-  { id: 'email', title: 'Email Provider' },
-  { id: 'apollo', title: 'Apollo' },
-  { id: 'linkedin', title: 'LinkedIn' },
-  { id: 'dnc', title: 'Do Not Contact' },
-]
+// Steps are dynamically computed based on channel selections
+const getSteps = (channels: OnboardingData['channels']) => {
+  const baseSteps = [
+    { id: 'company', title: 'Company' },
+    { id: 'icp', title: 'ICP & Messaging' },
+    { id: 'channels', title: 'Channels' },
+    { id: 'apollo', title: 'Apollo' },
+  ]
+
+  // Add email provider step if email channel selected
+  if (channels.outreachChannels.includes('email')) {
+    baseSteps.push({ id: 'email', title: 'Email Provider' })
+  }
+
+  // Add AudienceLab step if selected as data source
+  if (channels.dataSources.includes('audiencelab')) {
+    baseSteps.push({ id: 'audiencelab', title: 'Data Sources' })
+  }
+
+  // Add LinkedIn step if linkedin channel selected
+  if (channels.outreachChannels.includes('linkedin')) {
+    baseSteps.push({ id: 'linkedin', title: 'LinkedIn' })
+  }
+
+  // Always end with DNC
+  baseSteps.push({ id: 'dnc', title: 'Do Not Contact' })
+
+  return baseSteps
+}
 
 export default function OnboardingPage() {
   const [currentStep, setCurrentStep] = useState(0)
@@ -48,12 +105,28 @@ export default function OnboardingPage() {
   const router = useRouter()
 
   const [data, setData] = useState<OnboardingData>({
-    company: { companyName: '', yourName: '' },
+    company: { companyName: '', yourName: '', websiteUrl: '' },
+    icp: {
+      accountCriteria: null,
+      personas: [],
+      triggers: [],
+      researchStatus: 'idle',
+      marketResearch: '',
+    },
+    channels: {
+      outreachChannels: ['email'], // Default to email
+      dataSources: ['apollo'], // Apollo is always required
+    },
     emailProvider: { provider: '', apiKey: '', campaignId: '' },
     apollo: { apiKey: '' },
+    audienceLab: { sources: [], skip: false },
     linkedIn: { provider: '', apiKey: '', skip: false },
     dnc: { entries: [], skip: false },
   })
+
+  // Compute dynamic steps based on channel selections
+  const steps = getSteps(data.channels)
+  const currentStepId = steps[currentStep]?.id
 
   const handleComplete = async () => {
     setLoading(true)
@@ -124,7 +197,7 @@ export default function OnboardingPage() {
               {index < steps.length - 1 && (
                 <div
                   className={cn(
-                    'w-16 sm:w-24 h-0.5 mx-2',
+                    'w-12 sm:w-16 h-0.5 mx-2',
                     index < currentStep ? 'bg-jsb-pink' : 'bg-jsb-navy-lighter'
                   )}
                 />
@@ -143,7 +216,7 @@ export default function OnboardingPage() {
 
       {/* Step Content */}
       <div className={cn(jsb.card, 'p-8')}>
-        {currentStep === 0 && (
+        {currentStepId === 'company' && (
           <CompanyStep
             data={data.company}
             onChange={(company) => setData({ ...data, company })}
@@ -151,16 +224,27 @@ export default function OnboardingPage() {
           />
         )}
 
-        {currentStep === 1 && (
-          <EmailProviderStep
-            data={data.emailProvider}
-            onChange={(emailProvider) => setData({ ...data, emailProvider })}
+        {currentStepId === 'icp' && (
+          <ICPStep
+            data={data.icp}
+            websiteUrl={data.company.websiteUrl}
+            companyName={data.company.companyName}
+            onChange={(icp) => setData({ ...data, icp })}
             onNext={goNext}
             onBack={goBack}
           />
         )}
 
-        {currentStep === 2 && (
+        {currentStepId === 'channels' && (
+          <ChannelsStep
+            data={data.channels}
+            onChange={(channels) => setData({ ...data, channels })}
+            onNext={goNext}
+            onBack={goBack}
+          />
+        )}
+
+        {currentStepId === 'apollo' && (
           <ApolloStep
             data={data.apollo}
             onChange={(apollo) => setData({ ...data, apollo })}
@@ -169,7 +253,25 @@ export default function OnboardingPage() {
           />
         )}
 
-        {currentStep === 3 && (
+        {currentStepId === 'email' && (
+          <EmailProviderStep
+            data={data.emailProvider}
+            onChange={(emailProvider) => setData({ ...data, emailProvider })}
+            onNext={goNext}
+            onBack={goBack}
+          />
+        )}
+
+        {currentStepId === 'audiencelab' && (
+          <AudienceLabStep
+            data={data.audienceLab}
+            onChange={(audienceLab) => setData({ ...data, audienceLab })}
+            onNext={goNext}
+            onBack={goBack}
+          />
+        )}
+
+        {currentStepId === 'linkedin' && (
           <LinkedInStep
             data={data.linkedIn}
             onChange={(linkedIn) => setData({ ...data, linkedIn })}
@@ -178,7 +280,7 @@ export default function OnboardingPage() {
           />
         )}
 
-        {currentStep === 4 && (
+        {currentStepId === 'dnc' && (
           <DNCStep
             data={data.dnc}
             onChange={(dnc) => setData({ ...data, dnc })}

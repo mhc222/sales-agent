@@ -5,6 +5,7 @@ import { jsb, cn } from '@/lib/styles'
 type CompanyData = {
   companyName: string
   yourName: string
+  websiteUrl: string
 }
 
 type Props = {
@@ -13,14 +14,32 @@ type Props = {
   onNext: () => void
 }
 
+// Simple URL validation - accepts with or without protocol
+function isValidUrl(url: string): boolean {
+  if (!url.trim()) return false
+  // Add protocol if missing for validation
+  const urlToTest = url.startsWith('http') ? url : `https://${url}`
+  try {
+    new URL(urlToTest)
+    return true
+  } catch {
+    return false
+  }
+}
+
 export default function CompanyStep({ data, onChange, onNext }: Props) {
-  const isValid = data.companyName.trim() && data.yourName.trim()
+  const isValid =
+    data.companyName.trim() &&
+    data.yourName.trim() &&
+    isValidUrl(data.websiteUrl)
 
   return (
     <div className="space-y-6">
       <div>
         <h2 className={cn(jsb.heading, 'text-xl mb-2')}>Tell us about your company</h2>
-        <p className="text-gray-400">This helps us personalize your experience</p>
+        <p className="text-gray-400">
+          We'll analyze your website to build your ideal customer profile automatically
+        </p>
       </div>
 
       <div className="space-y-4">
@@ -50,6 +69,23 @@ export default function CompanyStep({ data, onChange, onNext }: Props) {
             className={cn(jsb.input, 'w-full px-4 py-3')}
             placeholder="John Smith"
           />
+        </div>
+
+        <div>
+          <label htmlFor="websiteUrl" className={cn(jsb.label, 'block mb-2')}>
+            Company website
+          </label>
+          <input
+            id="websiteUrl"
+            type="text"
+            value={data.websiteUrl}
+            onChange={(e) => onChange({ ...data, websiteUrl: e.target.value })}
+            className={cn(jsb.input, 'w-full px-4 py-3')}
+            placeholder="yourcompany.com"
+          />
+          <p className="text-xs text-gray-500 mt-1">
+            We'll use this to research your business and generate your ICP
+          </p>
         </div>
       </div>
 

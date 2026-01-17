@@ -5,6 +5,70 @@
 
 import { createClient } from '@supabase/supabase-js'
 
+// AudienceLab source configuration (up to 5 per tenant)
+export interface AudienceLabSource {
+  name: string
+  api_url: string
+  api_key: string
+  type: 'pixel' | 'intent'
+  enabled?: boolean
+  schedule_cron?: string
+}
+
+// =============================================================================
+// ICP (Ideal Customer Profile) Types - AI-generated from URL research
+// =============================================================================
+
+/** Priority level for account criteria items */
+export type ICPPriority = 'high' | 'medium' | 'low'
+
+/** A single criterion with its priority */
+export interface ICPCriterionItem {
+  value: string
+  priority: ICPPriority
+}
+
+/** Account Criteria - defines the ideal company profile */
+export interface AccountCriteria {
+  company_types: ICPCriterionItem[]
+  industries: ICPCriterionItem[]
+  company_sizes: ICPCriterionItem[]
+  locations: ICPCriterionItem[]
+  revenue_ranges: ICPCriterionItem[]
+  technologies: ICPCriterionItem[]
+  prospecting_signals: ICPCriterionItem[]
+}
+
+/** A target persona with JTBD framework */
+export interface ICPPersona {
+  job_title: string
+  job_to_be_done: string
+  currently_they: string
+  which_results_in: string
+  how_we_solve: string
+  additional_benefits: string
+}
+
+/** Data source for trigger detection */
+export type TriggerSource = 'linkedin_personal' | 'linkedin_company' | 'perplexity'
+
+/** A smart trigger - contextual signal indicating prospect readiness */
+export interface ICPTrigger {
+  name: string
+  what_to_look_for: string[]  // Keywords, phrases, patterns to detect
+  source: TriggerSource
+  reasoning: string           // Why this trigger matters for this business
+}
+
+/** Complete ICP configuration - AI-generated from URL analysis */
+export interface TenantICP {
+  source_url?: string
+  account_criteria?: AccountCriteria
+  personas?: ICPPersona[]
+  triggers?: ICPTrigger[]
+  research_completed_at?: string
+}
+
 // Types for tenant settings
 export interface TenantIntegrations {
   apollo?: {
@@ -14,13 +78,25 @@ export interface TenantIntegrations {
   smartlead?: {
     api_key?: string
     campaign_id?: string
+    enabled?: boolean
+  }
+  nureply?: {
+    api_key?: string
+    lead_list_id?: string
+    campaign_id?: string
+    enabled?: boolean
+    last_sync?: string
   }
   instantly?: {
     api_key?: string
+    enabled?: boolean
   }
   heyreach?: {
     api_key?: string
+    campaign_id?: string
+    enabled?: boolean
   }
+  // Legacy single-source configs (for backwards compat)
   pixel?: {
     api_url?: string
     api_key?: string
@@ -31,6 +107,8 @@ export interface TenantIntegrations {
     api_key?: string
     enabled?: boolean
   }
+  // New multi-source config (up to 5)
+  audiencelab?: AudienceLabSource[]
 }
 
 export interface TenantDataSourcesConfig {
@@ -42,15 +120,23 @@ export interface TenantDataSourcesConfig {
 export interface TenantSettings {
   integrations?: TenantIntegrations
   data_sources?: TenantDataSourcesConfig
-  active_email_provider?: 'smartlead' | 'instantly'
+  // Active providers (selected during onboarding)
+  email_provider?: 'smartlead' | 'nureply' | 'instantly' | string
+  linkedin_provider?: 'heyreach' | string
+  // Legacy aliases
+  active_email_provider?: 'smartlead' | 'nureply' | 'instantly'
   active_linkedin_provider?: 'heyreach'
+  // Onboarding state
   onboarding_completed?: boolean
+  onboarding_step?: number
+  // Channel configuration
+  enabled_channels?: ('email' | 'linkedin')[]
+  // ICP - AI-generated from URL research
+  icp?: TenantICP
+  // Misc
   research_sources?: string[]
-  email_provider?: string
   email_provider_config?: Record<string, unknown>
-  linkedin_provider?: string
   linkedin_provider_config?: Record<string, unknown>
-  enabled_channels?: string[]
 }
 
 export interface Tenant {
