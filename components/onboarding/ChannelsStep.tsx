@@ -48,7 +48,6 @@ const sourceOptions = [
         <path strokeLinecap="round" d="M12 6v6l4 2" />
       </svg>
     ),
-    required: true,
   },
   {
     id: 'audiencelab',
@@ -59,7 +58,6 @@ const sourceOptions = [
         <path strokeLinecap="round" strokeLinejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
       </svg>
     ),
-    required: false,
   },
 ] as const
 
@@ -76,18 +74,18 @@ export default function ChannelsStep({ data, onChange, onNext, onBack }: Props) 
   }
 
   const toggleSource = (source: 'apollo' | 'audiencelab') => {
-    // Apollo is always required
-    if (source === 'apollo') return
-
     const current = data.dataSources
     if (current.includes(source)) {
+      // Don't allow removing last data source
+      if (current.length === 1) return
       onChange({ ...data, dataSources: current.filter((s) => s !== source) })
     } else {
       onChange({ ...data, dataSources: [...current, source] })
     }
   }
 
-  const isValid = data.outreachChannels.length > 0 && data.dataSources.includes('apollo')
+  // Valid if at least one channel and at least one data source
+  const isValid = data.outreachChannels.length > 0 && data.dataSources.length > 0
 
   return (
     <div className="space-y-8">
@@ -168,19 +166,16 @@ export default function ChannelsStep({ data, onChange, onNext, onBack }: Props) 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {sourceOptions.map((option) => {
             const isSelected = data.dataSources.includes(option.id)
-            const isDisabled = option.required
             return (
               <button
                 key={option.id}
                 onClick={() => toggleSource(option.id)}
-                disabled={isDisabled}
                 className={cn(
                   jsb.card,
                   'p-4 text-left transition-all duration-200',
                   isSelected
                     ? 'border-jsb-pink bg-jsb-pink/10'
-                    : 'hover:border-gray-600',
-                  isDisabled && 'cursor-not-allowed'
+                    : 'hover:border-gray-600'
                 )}
               >
                 <div className="flex items-start gap-4">
@@ -194,12 +189,7 @@ export default function ChannelsStep({ data, onChange, onNext, onBack }: Props) 
                   </div>
                   <div className="flex-1">
                     <div className="flex items-center justify-between">
-                      <span className={cn(jsb.heading, 'text-sm')}>
-                        {option.label}
-                        {option.required && (
-                          <span className="ml-2 text-xs text-jsb-pink">(Required)</span>
-                        )}
-                      </span>
+                      <span className={cn(jsb.heading, 'text-sm')}>{option.label}</span>
                       <div
                         className={cn(
                           'w-5 h-5 rounded border-2 flex items-center justify-center transition-colors',
@@ -222,6 +212,7 @@ export default function ChannelsStep({ data, onChange, onNext, onBack }: Props) 
             )
           })}
         </div>
+        <p className="text-xs text-gray-500 mt-2">Select at least one data source</p>
       </div>
 
       {/* Summary */}

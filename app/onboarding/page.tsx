@@ -79,8 +79,12 @@ const getSteps = (channels: OnboardingData['channels']) => {
     { id: 'company', title: 'Company' },
     { id: 'icp', title: 'ICP & Messaging' },
     { id: 'channels', title: 'Channels' },
-    { id: 'apollo', title: 'Apollo' },
   ]
+
+  // Add Apollo step if selected as data source
+  if (channels.dataSources.includes('apollo')) {
+    baseSteps.push({ id: 'apollo', title: 'Apollo' })
+  }
 
   // Add email provider step if email channel selected
   if (channels.outreachChannels.includes('email')) {

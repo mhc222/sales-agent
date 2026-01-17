@@ -65,8 +65,12 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'HeyReach API key is required when LinkedIn channel is selected' }, { status: 400 })
     }
 
-    if (!apollo?.apiKey) {
-      return NextResponse.json({ error: 'Apollo API key is required' }, { status: 400 })
+    // Validate at least one data source is configured
+    const hasApollo = dataSources.includes('apollo') && apollo?.apiKey
+    const hasAudienceLab = dataSources.includes('audiencelab') && audienceLab?.sources?.length > 0 && !audienceLab.skip
+
+    if (!hasApollo && !hasAudienceLab) {
+      return NextResponse.json({ error: 'At least one data source (Apollo or AudienceLab) is required' }, { status: 400 })
     }
 
     // Use service client for admin operations (bypasses RLS)
@@ -79,8 +83,11 @@ export async function POST(request: Request) {
       .replace(/^-|-$/g, '')
 
     // Build integrations config
-    const integrations: Record<string, unknown> = {
-      apollo: { api_key: apollo.apiKey, enabled: true },
+    const integrations: Record<string, unknown> = {}
+
+    // Apollo (only if configured)
+    if (hasApollo) {
+      integrations.apollo = { api_key: apollo.apiKey, enabled: true }
     }
 
     // Email provider (only if email channel selected)

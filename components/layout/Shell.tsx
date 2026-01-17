@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { Sidebar } from './Sidebar'
+import SettingsChat from '../SettingsChat'
 
 interface ShellProps {
   children: React.ReactNode
@@ -84,6 +85,9 @@ export function Shell({ children }: ShellProps) {
           {children}
         </main>
       </div>
+
+      {/* Floating Settings Chat */}
+      <SettingsChat />
     </div>
   )
 }
