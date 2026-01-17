@@ -4,13 +4,13 @@ import { jsb, cn } from '@/lib/styles'
 export default function LoginPage() {
   return (
     <div className="relative min-h-screen">
-      {/* Background Image */}
+      {/* Background Image - scaled down */}
       <div
-        className="absolute inset-0 bg-cover bg-center bg-no-repeat"
+        className="absolute inset-0 bg-cover bg-center bg-no-repeat scale-110"
         style={{ backgroundImage: 'url(/jsb-team.jpg)' }}
       />
-      {/* Dark Overlay with gradient */}
-      <div className="absolute inset-0 bg-gradient-to-br from-jsb-navy/95 via-jsb-navy/85 to-jsb-navy/90" />
+      {/* Lighter overlay to show more of the image */}
+      <div className="absolute inset-0 bg-gradient-to-br from-jsb-navy/80 via-jsb-navy/60 to-jsb-navy/70" />
 
       {/* Content */}
       <div className="relative z-10 flex items-center justify-center min-h-screen">
@@ -26,8 +26,8 @@ export default function LoginPage() {
             <p className={jsb.subheading}>Sign in to your account to continue</p>
           </div>
 
-          {/* Login Form Card */}
-          <div className={cn(jsb.card, 'p-8 backdrop-blur-sm bg-jsb-navy-light/80 border-jsb-navy-lighter/50')}>
+          {/* Login Form Card - more transparent with better blur */}
+          <div className={cn(jsb.card, 'p-8 backdrop-blur-md bg-jsb-navy-light/50 border-white/10 shadow-2xl')}>
             <LoginForm />
           </div>
 
