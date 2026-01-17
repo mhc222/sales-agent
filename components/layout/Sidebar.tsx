@@ -50,6 +50,11 @@ const secondaryNavigation = [
     icon: DataSourcesIcon,
   },
   {
+    name: 'Providers',
+    href: '/settings/providers',
+    icon: ProvidersIcon,
+  },
+  {
     name: 'DNC List',
     href: '/settings/dnc',
     icon: DNCIcon,
@@ -125,6 +130,14 @@ function DNCIcon({ className }: { className?: string }) {
   return (
     <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
       <path strokeLinecap="round" strokeLinejoin="round" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
+    </svg>
+  )
+}
+
+function ProvidersIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m13.35-.622l1.757-1.757a4.5 4.5 0 00-6.364-6.364l-4.5 4.5a4.5 4.5 0 001.242 7.244" />
     </svg>
   )
 }
