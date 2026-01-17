@@ -102,12 +102,14 @@ export async function POST(request: Request) {
 
     // AudienceLab sources (only if audiencelab data source selected)
     if (dataSources.includes('audiencelab') && audienceLab?.sources?.length > 0 && !audienceLab.skip) {
-      integrations.audiencelab = audienceLab.sources.slice(0, 5).map((s: AudienceLabSource) => ({
+      integrations.audiencelab = audienceLab.sources.slice(0, 5).map((s: AudienceLabSource & { intentKeywords?: string[]; audienceContext?: string }) => ({
         name: s.name,
         api_url: s.apiUrl,
         api_key: s.apiKey,
         type: s.type,
         enabled: s.enabled ?? true,
+        intent_keywords: s.intentKeywords || [], // Store intent keywords for this source
+        audience_context: s.audienceContext || '', // Store targeting context (company size, titles, etc.)
       }))
     }
 
@@ -178,8 +180,8 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Failed to link user to company' }, { status: 500 })
     }
 
-    // Seed RAG documents from ICP data
-    await seedRAGDocuments(serviceClient, tenant.id, company, icp)
+    // Seed RAG documents from ICP data and AudienceLab sources
+    await seedRAGDocuments(serviceClient, tenant.id, company, icp, audienceLab)
 
     // Add DNC entries if provided
     if (dnc?.entries?.length > 0 && !dnc.skip) {
@@ -208,6 +210,16 @@ export async function POST(request: Request) {
   }
 }
 
+interface AudienceLabOnboarding {
+  sources: Array<{
+    name: string
+    type: 'pixel' | 'intent'
+    intentKeywords?: string[]
+    audienceContext?: string
+  }>
+  skip: boolean
+}
+
 /**
  * Seed RAG documents with tenant-specific content from onboarding
  */
@@ -215,7 +227,8 @@ async function seedRAGDocuments(
   supabase: ReturnType<typeof createServiceClient>,
   tenantId: string,
   company: { companyName: string; yourName: string; websiteUrl: string },
-  icp: ICPData
+  icp: ICPData,
+  audienceLab?: AudienceLabOnboarding
 ) {
   const ragDocuments: Array<{
     tenant_id: string
@@ -342,6 +355,76 @@ Look for: ${t.what_to_look_for.join(', ')}`
 ${icp.marketResearch}`,
       metadata: { category: 'market_research', priority: 'medium' },
     })
+  }
+
+  // AudienceLab intent data sources - these leads are already showing buying intent
+  if (audienceLab && !audienceLab.skip && audienceLab.sources?.length > 0) {
+    const intentSources = audienceLab.sources.filter(
+      (s) => s.type === 'intent' && (s.intentKeywords?.length || s.audienceContext)
+    )
+
+    if (intentSources.length > 0) {
+      const intentContent = intentSources
+        .map((source) => {
+          const parts = [`INTENT AUDIENCE: ${source.name}`]
+
+          if (source.audienceContext) {
+            parts.push(`Targeting: ${source.audienceContext}`)
+          }
+
+          if (source.intentKeywords?.length) {
+            parts.push(`Intent Keywords: ${source.intentKeywords.join(', ')}`)
+            parts.push(
+              `NOTE: Leads from this source are ALREADY showing buying intent for these topics. ` +
+                `Reference their intent directly in outreach - they've been researching these solutions.`
+            )
+          }
+
+          return parts.join('\n')
+        })
+        .join('\n\n---\n\n')
+
+      ragDocuments.push({
+        tenant_id: tenantId,
+        rag_type: 'shared',
+        content: `Intent Data Sources for ${company.companyName}:
+
+These are pre-qualified leads showing active buying intent. Use this context to personalize outreach.
+
+${intentContent}`,
+        metadata: {
+          category: 'intent_data',
+          priority: 'high',
+          source_count: intentSources.length,
+        },
+      })
+    }
+
+    // Also add pixel sources for context (website visitors)
+    const pixelSources = audienceLab.sources.filter(
+      (s) => s.type === 'pixel' && s.audienceContext
+    )
+
+    if (pixelSources.length > 0) {
+      const pixelContent = pixelSources
+        .map((source) => `WEBSITE VISITOR AUDIENCE: ${source.name}\nTargeting: ${source.audienceContext}`)
+        .join('\n\n')
+
+      ragDocuments.push({
+        tenant_id: tenantId,
+        rag_type: 'shared',
+        content: `Website Visitor Audiences for ${company.companyName}:
+
+These leads visited the website, indicating interest. Use this context for outreach.
+
+${pixelContent}`,
+        metadata: {
+          category: 'pixel_data',
+          priority: 'medium',
+          source_count: pixelSources.length,
+        },
+      })
+    }
   }
 
   // Insert RAG documents

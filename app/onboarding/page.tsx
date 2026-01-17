@@ -57,6 +57,8 @@ type OnboardingData = {
       apiKey: string
       type: 'pixel' | 'intent'
       enabled: boolean
+      intentKeywords?: string[]
+      audienceContext?: string
     }>
     skip: boolean
   }

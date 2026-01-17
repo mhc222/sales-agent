@@ -9,6 +9,8 @@ type AudienceLabSource = {
   apiKey: string
   type: 'pixel' | 'intent'
   enabled: boolean
+  intentKeywords?: string[] // Keywords this audience is showing intent for
+  audienceContext?: string // Full targeting parameters (company size, industries, titles, etc.)
 }
 
 type AudienceLabData = {
@@ -29,6 +31,8 @@ const emptySource = (): AudienceLabSource => ({
   apiKey: '',
   type: 'pixel',
   enabled: true,
+  intentKeywords: [],
+  audienceContext: '',
 })
 
 export default function AudienceLabStep({ data, onChange, onNext, onBack }: Props) {
@@ -94,7 +98,12 @@ export default function AudienceLabStep({ data, onChange, onNext, onBack }: Prop
     onNext()
   }
 
-  const isValid = data.skip || data.sources.every((s) => s.name && s.apiUrl && s.apiKey)
+  const isValid = data.skip || data.sources.every((s) =>
+    s.name &&
+    s.apiUrl &&
+    s.apiKey &&
+    (s.type === 'pixel' || (s.intentKeywords && s.intentKeywords.length > 0))
+  )
 
   return (
     <div className="space-y-6">
@@ -170,7 +179,54 @@ export default function AudienceLabStep({ data, onChange, onNext, onBack }: Prop
                 </div>
               </div>
 
-              <div>
+              {/* Audience Targeting Context - for both types */}
+              <div className="col-span-2">
+                <label className={cn(jsb.label, 'block mb-1 text-xs')}>
+                  Audience Targeting
+                  <span className="text-gray-500 font-normal ml-2">
+                    (Describe who this audience targets)
+                  </span>
+                </label>
+                <textarea
+                  value={source.audienceContext || ''}
+                  onChange={(e) => updateSource(index, { audienceContext: e.target.value })}
+                  className={cn(jsb.input, 'w-full px-3 py-2 text-sm min-h-[60px]')}
+                  placeholder="e.g., VP of Sales and CROs at B2B SaaS companies, 50-500 employees, $5M-50M revenue, US-based, using Salesforce or HubSpot"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Copy your AudienceLab targeting parameters. This context helps personalize outreach.
+                </p>
+              </div>
+
+              {/* Intent Keywords - only show for intent type */}
+              {source.type === 'intent' && (
+                <div className="col-span-2">
+                  <label className={cn(jsb.label, 'block mb-1 text-xs')}>
+                    Intent Keywords
+                    <span className="text-gray-500 font-normal ml-2">
+                      (What topics are these leads showing intent for?)
+                    </span>
+                  </label>
+                  <textarea
+                    value={(source.intentKeywords || []).join(', ')}
+                    onChange={(e) => {
+                      const keywords = e.target.value
+                        .split(/[,\n]/)
+                        .map((k) => k.trim())
+                        .filter((k) => k.length > 0)
+                      updateSource(index, { intentKeywords: keywords })
+                    }}
+                    className={cn(jsb.input, 'w-full px-3 py-2 text-sm min-h-[80px]')}
+                    placeholder="e.g., sales automation, CRM software, lead generation, outbound sales&#10;&#10;Enter keywords separated by commas or new lines"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">
+                    These keywords will be used to personalize outreach and match against ICP triggers.
+                    Leads from this source are already showing buying intent for these topics.
+                  </p>
+                </div>
+              )}
+
+              <div className={source.type === 'intent' ? 'col-span-2' : ''}>
                 <label className={cn(jsb.label, 'block mb-1 text-xs')}>API URL</label>
                 <input
                   type="text"
