@@ -117,6 +117,15 @@ export interface TenantDataSourcesConfig {
   min_intent_score?: number
 }
 
+/** Targeting preference for lead scoring/prioritization */
+export interface TargetingPreference {
+  field: string
+  preference: string
+  weight?: number
+  created_at?: string
+  updated_at?: string
+}
+
 export interface TenantSettings {
   integrations?: TenantIntegrations
   data_sources?: TenantDataSourcesConfig
@@ -133,6 +142,8 @@ export interface TenantSettings {
   enabled_channels?: ('email' | 'linkedin')[]
   // ICP - AI-generated from URL research
   icp?: TenantICP
+  // Targeting preferences - weights and prioritization for lead scoring
+  targeting_preferences?: TargetingPreference[]
   // Misc
   research_sources?: string[]
   email_provider_config?: Record<string, unknown>

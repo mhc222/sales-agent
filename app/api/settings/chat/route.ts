@@ -12,6 +12,51 @@ interface ChatMessage {
   content: string
 }
 
+// Available data fields per source - the chat must validate against these
+const DATA_SCHEMA = {
+  apollo: {
+    name: 'Apollo (Lead Enrichment)',
+    fields: [
+      'job_title', 'seniority', 'department', 'email', 'phone',
+      'company_name', 'company_size', 'employee_count', 'industry',
+      'location', 'city', 'state', 'country', 'revenue_range',
+      'technologies', 'keywords', 'founded_year', 'linkedin_url',
+      'is_hiring', 'job_postings', 'funding_stage', 'last_funding_date'
+    ],
+    notes: 'Does NOT include: social media activity, posting frequency, engagement metrics, gender, age'
+  },
+  audiencelab: {
+    name: 'AudienceLab (Intent Data)',
+    fields: [
+      'intent_score', 'intent_keywords', 'page_visits', 'visit_count',
+      'first_visit', 'last_visit', 'pages_viewed', 'time_on_site',
+      'audience_name', 'audience_type'
+    ],
+    notes: 'Shows buying intent signals. Does NOT include: demographic data, job changes, social activity'
+  },
+  linkedin: {
+    name: 'LinkedIn (via HeyReach)',
+    fields: [
+      'connection_status', 'message_sent', 'message_opened',
+      'replied', 'profile_viewed', 'connection_accepted'
+    ],
+    notes: 'Engagement data only. Does NOT include: posting frequency, content engagement, follower count'
+  },
+  derived: {
+    name: 'Derived/Computed Fields',
+    fields: [
+      'lead_score', 'persona_match', 'trigger_matches', 'icp_fit_score',
+      'days_since_trigger', 'outreach_stage', 'channel_preference'
+    ],
+    notes: 'Calculated by the system based on available data'
+  }
+}
+
+// Flatten all available fields for quick lookup
+const ALL_AVAILABLE_FIELDS = new Set(
+  Object.values(DATA_SCHEMA).flatMap(source => source.fields)
+)
+
 export async function POST(request: Request) {
   try {
     // Verify user is authenticated
@@ -69,50 +114,103 @@ export async function POST(request: Request) {
       model: 'claude-sonnet-4-20250514',
       max_tokens: 2048,
       system: `You are an AI assistant helping configure a B2B sales outreach platform.
-You can help users with:
 
+## WHAT YOU CAN HELP WITH:
 1. ICP (Ideal Customer Profile): personas, triggers, account criteria
 2. Messaging tone and style guidelines
 3. Do Not Contact (DNC) list: add emails or domains to block
 4. Brand-specific knowledge: case studies, competitor intel, talking points
-5. General questions about the platform
+5. Terminology corrections: learn the right way to describe things
+6. Targeting preferences: weight certain attributes higher/lower in lead scoring
+7. General questions about the platform
 
-Current tenant settings:
+## AVAILABLE DATA SCHEMA - CRITICAL:
+You can ONLY set preferences or weights on data fields that actually exist. Here's what's available:
+
+${Object.entries(DATA_SCHEMA).map(([key, source]) => `
+**${source.name}:**
+Fields: ${source.fields.join(', ')}
+Note: ${source.notes}
+`).join('\n')}
+
+## HANDLING UNAVAILABLE DATA:
+If a user asks to weight or filter by something NOT in the schema above (like "LinkedIn posting frequency", "gender", "age", "social media activity"), you MUST:
+1. Politely explain you don't have access to that data
+2. Suggest available alternatives that might serve as a proxy
+3. Mention they could request this as a feature enhancement
+
+Example response: "I can't weight by LinkedIn posting frequency - that data isn't available from our current sources. As an alternative, I could prioritize by seniority + recent job change, which often correlates with engagement. Want me to set that up instead?"
+
+## CURRENT SETTINGS:
 ${JSON.stringify(currentSettings, null, 2)}
 
 Current DNC entries (sample):
 ${JSON.stringify(dncEntries || [], null, 2)}
 
+## ACTIONS:
 When the user asks to make changes, respond with a JSON block:
 \`\`\`json
 {
-  "action": "update_settings" | "update_rag" | "add_dnc" | "no_action",
-  "changes": {
-    // The specific changes to make
-  },
+  "action": "update_settings" | "update_rag" | "add_dnc" | "add_terminology" | "update_targeting" | "no_action",
+  "changes": { /* specific changes */ },
   "summary": "Brief description of what was changed"
 }
 \`\`\`
 
-ACTIONS:
-- "update_settings": Update ICP (personas, triggers, account_criteria)
-- "update_rag": Add brand knowledge, tone guidelines, case studies (use rag_content field)
-- "add_dnc": Add to Do Not Contact list (use dnc_entries: [{type: "email"|"domain", value: "..."}])
-- "no_action": Just answer the question, no changes needed
+**update_settings**: Update ICP (personas, triggers, account_criteria)
+**update_rag**: Add brand knowledge, tone guidelines, case studies
+**add_dnc**: Add to Do Not Contact list
+**add_terminology**: Store language/phrasing corrections (use terminology field)
+**update_targeting**: Set targeting preferences and weights (use targeting_preferences field)
+**no_action**: Just answer the question
+
+## TERMINOLOGY CORRECTIONS:
+When users correct language (e.g., "it's not a travel agency, it's an agency that focuses on travel"), store it:
+\`\`\`json
+{
+  "action": "add_terminology",
+  "changes": {
+    "terminology": {
+      "incorrect": "travel agency",
+      "correct": "agency that focuses on travel",
+      "context": "How to describe the company type"
+    }
+  }
+}
+\`\`\`
+
+## TARGETING PREFERENCES:
+For weighting and prioritization (ONLY use available fields):
+\`\`\`json
+{
+  "action": "update_targeting",
+  "changes": {
+    "targeting_preferences": {
+      "field": "seniority",
+      "preference": "Prioritize Director and above",
+      "weight": 1.5
+    }
+  }
+}
+\`\`\`
+
+Valid targeting fields: ${Array.from(ALL_AVAILABLE_FIELDS).join(', ')}
+
+## OTHER FORMATS:
 
 For ICP updates:
 - account_criteria: { company_types, industries, company_sizes, locations, revenue_ranges, technologies, prospecting_signals }
 - personas: array of { job_title, job_to_be_done, currently_they, which_results_in, how_we_solve, additional_benefits }
 - triggers: array of { name, what_to_look_for, source, reasoning }
 
-For RAG/knowledge updates, use:
+For RAG/knowledge updates:
 - rag_content: "The content to add"
-- rag_category: "case_study" | "competitor_intel" | "messaging_guidelines" | "objection_handling" | "product_knowledge"
+- rag_category: "case_study" | "competitor_intel" | "messaging_guidelines" | "objection_handling" | "product_knowledge" | "terminology"
 
-For DNC, use:
+For DNC:
 - dnc_entries: [{type: "domain", value: "nike.com"}, {type: "email", value: "john@example.com"}]
 
-If unclear, ask clarifying questions. Be conversational but efficient.`,
+Be conversational but efficient. Always validate against available data before accepting preferences.`,
       messages: [
         ...history.map((msg) => ({
           role: msg.role as 'user' | 'assistant',
@@ -236,6 +334,109 @@ If unclear, ask clarifying questions. Be conversational but efficient.`,
             reply: conversationalReply,
             summary: actionData.summary,
             changes: { dnc_added: entries.length },
+          })
+        }
+
+        // Handle terminology corrections
+        if (actionData.action === 'add_terminology' && actionData.changes?.terminology) {
+          const term = actionData.changes.terminology as {
+            incorrect: string
+            correct: string
+            context?: string
+          }
+
+          // Store terminology in RAG for future reference
+          await serviceClient.from('rag_documents').insert({
+            tenant_id: tenantId,
+            rag_type: 'terminology',
+            content: `TERMINOLOGY CORRECTION:
+Wrong: "${term.incorrect}"
+Correct: "${term.correct}"
+Context: ${term.context || 'General usage'}
+
+Always use "${term.correct}" instead of "${term.incorrect}" in all communications.`,
+            metadata: {
+              category: 'terminology',
+              priority: 'high',
+              incorrect_term: term.incorrect,
+              correct_term: term.correct,
+              updated_via: 'chat',
+              created_at: new Date().toISOString(),
+            },
+          })
+
+          const conversationalReply = responseText.replace(/```json[\s\S]*?```/, '').trim() ||
+            `Got it! I'll remember to say "${term.correct}" instead of "${term.incorrect}" going forward.`
+
+          return NextResponse.json({
+            reply: conversationalReply,
+            summary: actionData.summary,
+            changes: { terminology_added: term },
+          })
+        }
+
+        // Handle targeting preferences
+        if (actionData.action === 'update_targeting' && actionData.changes?.targeting_preferences) {
+          const pref = actionData.changes.targeting_preferences as {
+            field: string
+            preference: string
+            weight?: number
+          }
+
+          // Validate field is in our schema
+          if (!ALL_AVAILABLE_FIELDS.has(pref.field)) {
+            return NextResponse.json({
+              reply: `I can't set a preference for "${pref.field}" - that data isn't available from our current sources. Available fields include: job_title, seniority, company_size, industry, intent_score, and more. What would you like to use instead?`,
+            })
+          }
+
+          // Get current targeting preferences or initialize
+          const currentTargeting = tenant.settings?.targeting_preferences || []
+
+          // Add or update the preference
+          const existingIndex = currentTargeting.findIndex(
+            (p: { field: string }) => p.field === pref.field
+          )
+
+          if (existingIndex >= 0) {
+            currentTargeting[existingIndex] = {
+              ...currentTargeting[existingIndex],
+              ...pref,
+              updated_at: new Date().toISOString(),
+            }
+          } else {
+            currentTargeting.push({
+              ...pref,
+              created_at: new Date().toISOString(),
+            })
+          }
+
+          // Update tenant settings
+          const updatedSettings = {
+            ...tenant.settings,
+            targeting_preferences: currentTargeting,
+          }
+
+          const { error: updateError } = await serviceClient
+            .from('tenants')
+            .update({ settings: updatedSettings })
+            .eq('id', tenantId)
+
+          if (updateError) {
+            console.error('Targeting update error:', updateError)
+            return NextResponse.json({
+              reply: "I understood your preference but encountered an error saving it. Please try again.",
+              error: updateError.message,
+            })
+          }
+
+          const conversationalReply = responseText.replace(/```json[\s\S]*?```/, '').trim() ||
+            `Done! ${actionData.summary || `I'll now ${pref.preference.toLowerCase()} when scoring leads.`}`
+
+          return NextResponse.json({
+            reply: conversationalReply,
+            summary: actionData.summary,
+            changes: { targeting_updated: pref },
           })
         }
       } catch (parseError) {
