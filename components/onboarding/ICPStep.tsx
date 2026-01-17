@@ -35,17 +35,116 @@ type Props = {
   onBack: () => void
 }
 
-// Loading animation component
-function ResearchingAnimation({ stage }: { stage: string }) {
+// Research stages for step display
+const RESEARCH_STAGES = [
+  'Analyzing website',
+  'Identifying target outcomes',
+  'Building account criteria',
+  'Creating buyer personas',
+  'Discovering trigger signals',
+  'Finalizing ICP'
+]
+
+// Loading animation component with step progress
+function ResearchingAnimation({ stage, stageIndex, isComplete }: { stage: string; stageIndex: number; isComplete?: boolean }) {
   return (
-    <div className="flex flex-col items-center justify-center py-16 space-y-6">
-      <div className="relative">
-        <div className="w-16 h-16 border-4 border-jsb-pink/20 rounded-full animate-spin border-t-jsb-pink" />
+    <div className="flex flex-col items-center justify-center py-12 space-y-8">
+      {/* Animated spinner with dual rings - or success icon when complete */}
+      <div className="relative w-20 h-20">
+        {isComplete ? (
+          <>
+            {/* Success animation */}
+            <div className="absolute inset-0 bg-green-500/20 rounded-full animate-ping" />
+            <div className="absolute inset-0 bg-green-500 rounded-full flex items-center justify-center animate-scale-check">
+              <svg className="w-10 h-10 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+              </svg>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="absolute inset-0 border-4 border-jsb-pink/20 rounded-full" />
+            <div className="absolute inset-0 border-4 border-transparent border-t-jsb-pink rounded-full animate-spin" />
+            <div
+              className="absolute inset-2 border-4 border-transparent border-t-jsb-pink-light rounded-full animate-spin"
+              style={{ animationDirection: 'reverse', animationDuration: '1.5s' }}
+            />
+            {/* Center icon */}
+            <div className="absolute inset-0 flex items-center justify-center">
+              <svg className="w-6 h-6 text-jsb-pink animate-pulse" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
+            </div>
+          </>
+        )}
       </div>
+
+      {/* Title with shimmer effect */}
       <div className="text-center space-y-2">
-        <h3 className={cn(jsb.heading, 'text-lg')}>Researching your business...</h3>
-        <p className="text-gray-400 text-sm">{stage}</p>
+        <h3 className={cn(jsb.heading, 'text-xl')}>
+          {isComplete ? 'Research Complete!' : 'Researching your business...'}
+        </h3>
+        <p className={cn(
+          'text-sm font-medium',
+          isComplete ? 'text-green-400' : 'text-jsb-pink animate-pulse'
+        )}>
+          {isComplete ? 'Your ICP is ready for review' : stage}
+        </p>
       </div>
+
+      {/* Step progress indicators */}
+      <div className="w-full max-w-md space-y-3">
+        {RESEARCH_STAGES.map((s, index) => {
+          const isStepComplete = index < stageIndex || isComplete
+          const isCurrent = index === stageIndex && !isComplete
+          const isPending = index > stageIndex && !isComplete
+
+          return (
+            <div key={index} className="flex items-center gap-3">
+              <div
+                className={cn(
+                  'w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium transition-all duration-500',
+                  isStepComplete && 'bg-green-500 text-white scale-100',
+                  isCurrent && 'bg-jsb-pink text-white animate-pulse scale-110',
+                  isPending && 'bg-jsb-navy-lighter text-gray-500 scale-90'
+                )}
+              >
+                {isStepComplete ? (
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                  </svg>
+                ) : (
+                  index + 1
+                )}
+              </div>
+              <span
+                className={cn(
+                  'text-sm transition-all duration-300',
+                  isStepComplete && 'text-green-400',
+                  isCurrent && 'text-white font-medium',
+                  isPending && 'text-gray-500'
+                )}
+              >
+                {s}
+              </span>
+              {isCurrent && !isComplete && (
+                <div className="ml-auto flex items-center gap-1">
+                  <div className="w-1.5 h-1.5 bg-jsb-pink rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                  <div className="w-1.5 h-1.5 bg-jsb-pink rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                  <div className="w-1.5 h-1.5 bg-jsb-pink rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+
+      {/* Subtle hint */}
+      {!isComplete && (
+        <p className="text-gray-500 text-xs text-center max-w-sm">
+          AI is analyzing your website and industry to build a comprehensive customer profile
+        </p>
+      )}
     </div>
   )
 }
@@ -116,10 +215,12 @@ export default function ICPStep({
   onBack,
 }: Props) {
   const [researchStage, setResearchStage] = useState('Analyzing website...')
+  const [researchStageIndex, setResearchStageIndex] = useState(0)
   const [showMarketResearch, setShowMarketResearch] = useState(false)
   const [isReconciling, setIsReconciling] = useState(false)
   const [reconcileStage, setReconcileStage] = useState('')
   const [showChanges, setShowChanges] = useState(false)
+  const [showSuccess, setShowSuccess] = useState(false)
 
   // Trigger research when component mounts if not already done
   useEffect(() => {
@@ -130,6 +231,7 @@ export default function ICPStep({
 
   async function runResearch() {
     onChange({ ...data, researchStatus: 'loading' })
+    setResearchStageIndex(0)
 
     try {
       // Stage 1: Analyzing website
@@ -151,6 +253,16 @@ export default function ICPStep({
       const decoder = new TextDecoder()
       let result = ''
 
+      // Map stage messages to indices for progress display
+      const stageMap: Record<string, number> = {
+        'Analyzing website': 0,
+        'Identifying target outcomes': 1,
+        'Building account criteria': 2,
+        'Creating buyer personas': 3,
+        'Discovering trigger signals': 4,
+        'Finalizing': 5,
+      }
+
       if (reader) {
         while (true) {
           const { done, value } = await reader.read()
@@ -163,7 +275,16 @@ export default function ICPStep({
           const lines = chunk.split('\n')
           for (const line of lines) {
             if (line.startsWith('stage:')) {
-              setResearchStage(line.replace('stage:', '').trim())
+              const stageText = line.replace('stage:', '').trim()
+              setResearchStage(stageText)
+
+              // Update stage index based on keywords
+              for (const [key, idx] of Object.entries(stageMap)) {
+                if (stageText.toLowerCase().includes(key.toLowerCase())) {
+                  setResearchStageIndex(idx)
+                  break
+                }
+              }
             }
           }
         }
@@ -173,6 +294,13 @@ export default function ICPStep({
       const lines = result.split('\n').filter((l) => l.trim())
       const lastLine = lines[lines.length - 1]
       const researchResult = JSON.parse(lastLine)
+
+      // Show success animation briefly
+      setResearchStageIndex(RESEARCH_STAGES.length)
+      setShowSuccess(true)
+
+      // Small delay to show the success state
+      await new Promise((resolve) => setTimeout(resolve, 1500))
 
       onChange({
         ...data,
@@ -273,7 +401,7 @@ export default function ICPStep({
 
   // Show loading state
   if (data.researchStatus === 'loading') {
-    return <ResearchingAnimation stage={researchStage} />
+    return <ResearchingAnimation stage={researchStage} stageIndex={researchStageIndex} isComplete={showSuccess} />
   }
 
   // Show error state

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { jsb, cn } from '@/lib/styles'
 import CompanyStep from '@/components/onboarding/CompanyStep'
@@ -17,6 +17,8 @@ import type {
   ICPPersona,
   ICPTrigger,
 } from '@/src/lib/tenant-settings'
+
+const STORAGE_KEY = 'onboarding_progress'
 
 type OnboardingData = {
   company: {
@@ -107,31 +109,77 @@ const getSteps = (channels: OnboardingData['channels']) => {
   return baseSteps
 }
 
+const defaultData: OnboardingData = {
+  company: { companyName: '', yourName: '', websiteUrl: '' },
+  icp: {
+    accountCriteria: null,
+    personas: [],
+    triggers: [],
+    researchStatus: 'idle',
+    marketResearch: '',
+  },
+  channels: {
+    outreachChannels: ['email'], // Default to email
+    dataSources: ['apollo'], // Apollo is always required
+  },
+  emailProvider: { provider: '', apiKey: '', campaignId: '' },
+  apollo: { apiKey: '' },
+  audienceLab: { sources: [], skip: false },
+  linkedIn: { provider: '', apiKey: '', skip: false },
+  dnc: { entries: [], skip: false },
+}
+
 export default function OnboardingPage() {
   const [currentStep, setCurrentStep] = useState(0)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [restored, setRestored] = useState(false)
+  const [showRestoredBanner, setShowRestoredBanner] = useState(false)
   const router = useRouter()
 
-  const [data, setData] = useState<OnboardingData>({
-    company: { companyName: '', yourName: '', websiteUrl: '' },
-    icp: {
-      accountCriteria: null,
-      personas: [],
-      triggers: [],
-      researchStatus: 'idle',
-      marketResearch: '',
-    },
-    channels: {
-      outreachChannels: ['email'], // Default to email
-      dataSources: ['apollo'], // Apollo is always required
-    },
-    emailProvider: { provider: '', apiKey: '', campaignId: '' },
-    apollo: { apiKey: '' },
-    audienceLab: { sources: [], skip: false },
-    linkedIn: { provider: '', apiKey: '', skip: false },
-    dnc: { entries: [], skip: false },
-  })
+  const [data, setData] = useState<OnboardingData>(defaultData)
+
+  // Restore progress from localStorage on mount
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY)
+      if (saved) {
+        const parsed = JSON.parse(saved)
+        if (parsed.data && parsed.step !== undefined) {
+          setData(parsed.data)
+          setCurrentStep(parsed.step)
+          setRestored(true)
+          setShowRestoredBanner(true)
+          // Hide banner after 5 seconds
+          setTimeout(() => setShowRestoredBanner(false), 5000)
+        }
+      }
+    } catch (e) {
+      console.error('Failed to restore onboarding progress:', e)
+    }
+  }, [])
+
+  // Save progress to localStorage whenever data or step changes
+  const saveProgress = useCallback((newData: OnboardingData, step: number) => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        data: newData,
+        step,
+        savedAt: new Date().toISOString(),
+      }))
+    } catch (e) {
+      console.error('Failed to save onboarding progress:', e)
+    }
+  }, [])
+
+  // Clear saved progress
+  const clearProgress = useCallback(() => {
+    try {
+      localStorage.removeItem(STORAGE_KEY)
+    } catch (e) {
+      console.error('Failed to clear onboarding progress:', e)
+    }
+  }, [])
 
   // Compute dynamic steps based on channel selections
   const steps = getSteps(data.channels)
@@ -155,6 +203,9 @@ export default function OnboardingPage() {
         return
       }
 
+      // Clear saved progress on successful completion
+      clearProgress()
+
       // Redirect to dashboard
       router.push('/dashboard')
       router.refresh()
@@ -165,11 +216,63 @@ export default function OnboardingPage() {
     }
   }
 
-  const goNext = () => setCurrentStep((s) => Math.min(s + 1, steps.length - 1))
-  const goBack = () => setCurrentStep((s) => Math.max(s - 1, 0))
+  const goNext = () => {
+    setCurrentStep((s) => {
+      const next = Math.min(s + 1, steps.length - 1)
+      // Save progress when moving to next step
+      saveProgress(data, next)
+      return next
+    })
+  }
+
+  const goBack = () => {
+    setCurrentStep((s) => {
+      const prev = Math.max(s - 1, 0)
+      // Save progress when going back
+      saveProgress(data, prev)
+      return prev
+    })
+  }
+
+  // Helper to update data and save progress
+  const updateData = (updates: Partial<OnboardingData>) => {
+    const newData = { ...data, ...updates }
+    setData(newData)
+    saveProgress(newData, currentStep)
+  }
 
   return (
     <div>
+      {/* Restored Progress Banner */}
+      {showRestoredBanner && (
+        <div className="mb-6 p-4 rounded-lg bg-jsb-pink/10 border border-jsb-pink/30 animate-fade-in">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 rounded-full bg-jsb-pink/20 flex items-center justify-center">
+                <svg className="w-4 h-4 text-jsb-pink" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+              </div>
+              <div>
+                <p className="text-sm text-white font-medium">Progress Restored</p>
+                <p className="text-xs text-gray-400">We&apos;ve restored your previous onboarding progress.</p>
+              </div>
+            </div>
+            <button
+              onClick={() => {
+                clearProgress()
+                setData(defaultData)
+                setCurrentStep(0)
+                setShowRestoredBanner(false)
+              }}
+              className="text-xs text-gray-400 hover:text-white transition-colors px-3 py-1 rounded hover:bg-jsb-navy-lighter"
+            >
+              Start Over
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Progress Steps */}
       <div className="mb-10">
         <div className="flex items-center justify-between">
@@ -228,7 +331,7 @@ export default function OnboardingPage() {
         {currentStepId === 'company' && (
           <CompanyStep
             data={data.company}
-            onChange={(company) => setData({ ...data, company })}
+            onChange={(company) => updateData({ company })}
             onNext={goNext}
           />
         )}
@@ -238,7 +341,7 @@ export default function OnboardingPage() {
             data={data.icp}
             websiteUrl={data.company.websiteUrl}
             companyName={data.company.companyName}
-            onChange={(icp) => setData({ ...data, icp })}
+            onChange={(icp) => updateData({ icp })}
             onNext={goNext}
             onBack={goBack}
           />
@@ -247,7 +350,7 @@ export default function OnboardingPage() {
         {currentStepId === 'channels' && (
           <ChannelsStep
             data={data.channels}
-            onChange={(channels) => setData({ ...data, channels })}
+            onChange={(channels) => updateData({ channels })}
             onNext={goNext}
             onBack={goBack}
           />
@@ -256,7 +359,7 @@ export default function OnboardingPage() {
         {currentStepId === 'apollo' && (
           <ApolloStep
             data={data.apollo}
-            onChange={(apollo) => setData({ ...data, apollo })}
+            onChange={(apollo) => updateData({ apollo })}
             onNext={goNext}
             onBack={goBack}
           />
@@ -265,7 +368,7 @@ export default function OnboardingPage() {
         {currentStepId === 'email' && (
           <EmailProviderStep
             data={data.emailProvider}
-            onChange={(emailProvider) => setData({ ...data, emailProvider })}
+            onChange={(emailProvider) => updateData({ emailProvider })}
             onNext={goNext}
             onBack={goBack}
           />
@@ -274,7 +377,7 @@ export default function OnboardingPage() {
         {currentStepId === 'audiencelab' && (
           <AudienceLabStep
             data={data.audienceLab}
-            onChange={(audienceLab) => setData({ ...data, audienceLab })}
+            onChange={(audienceLab) => updateData({ audienceLab })}
             onNext={goNext}
             onBack={goBack}
           />
@@ -283,7 +386,7 @@ export default function OnboardingPage() {
         {currentStepId === 'linkedin' && (
           <LinkedInStep
             data={data.linkedIn}
-            onChange={(linkedIn) => setData({ ...data, linkedIn })}
+            onChange={(linkedIn) => updateData({ linkedIn })}
             onNext={goNext}
             onBack={goBack}
           />
@@ -292,7 +395,7 @@ export default function OnboardingPage() {
         {currentStepId === 'dnc' && (
           <DNCStep
             data={data.dnc}
-            onChange={(dnc) => setData({ ...data, dnc })}
+            onChange={(dnc) => updateData({ dnc })}
             onComplete={handleComplete}
             onBack={goBack}
             loading={loading}
