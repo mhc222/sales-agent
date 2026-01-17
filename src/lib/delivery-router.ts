@@ -12,18 +12,52 @@
 
 import { supabase } from './supabase'
 import * as smartlead from './smartlead'
+import * as nureply from './nureply'
+import * as heyreach from './heyreach'
 
 // ============================================================================
 // TYPES
 // ============================================================================
 
 export interface TenantSettings {
-  email_provider?: 'smartlead' | 'zapmail' | 'instantly' | string
+  email_provider?: 'smartlead' | 'nureply' | 'zapmail' | 'instantly' | string
   email_provider_config?: Record<string, unknown>
   linkedin_provider?: 'heyreach' | 'phantombuster' | string
   linkedin_provider_config?: Record<string, unknown>
   research_sources?: string[]
   enabled_channels?: string[]
+  integrations?: {
+    smartlead?: {
+      api_key: string
+      campaign_id?: string
+      enabled?: boolean
+    }
+    nureply?: {
+      api_key: string
+      lead_list_id?: string
+      campaign_id?: string
+      enabled?: boolean
+      last_sync?: string
+    }
+    heyreach?: {
+      api_key: string
+      campaign_id?: string
+      enabled?: boolean
+    }
+    apollo?: {
+      api_key: string
+      enabled?: boolean
+    }
+    // AudienceLab sources (up to 5)
+    audiencelab?: Array<{
+      name: string
+      api_url: string
+      api_key: string
+      type: 'pixel' | 'intent'
+      enabled?: boolean
+      schedule_cron?: string
+    }>
+  }
 }
 
 export interface EmailSequenceDelivery {
@@ -162,6 +196,120 @@ async function deliverViaSmartlead(delivery: EmailSequenceDelivery): Promise<Del
 }
 
 /**
+ * Nureply adapter - uses template campaign with dynamic variables
+ */
+async function deliverViaNureply(
+  tenantId: string,
+  settings: TenantSettings,
+  delivery: EmailSequenceDelivery
+): Promise<DeliveryResult> {
+  try {
+    const nureplyConfig = settings.integrations?.nureply
+    if (!nureplyConfig?.api_key) {
+      return {
+        success: false,
+        provider: 'nureply',
+        error: 'Nureply API key not configured',
+      }
+    }
+
+    const config = { apiKey: nureplyConfig.api_key }
+
+    // 1. Get or create lead list for this tenant
+    let leadListId = nureplyConfig.lead_list_id
+    if (!leadListId) {
+      const list = await nureply.createLeadList(config, 'Sales Agent Leads')
+      leadListId = list.id
+      // Update tenant settings with lead list ID
+      await updateTenantIntegration(tenantId, 'nureply', { lead_list_id: leadListId })
+    }
+
+    // 2. Check DNC before adding
+    const dncCheck = await nureply.checkDNC(config, delivery.lead.email)
+    if (dncCheck.blocked) {
+      return {
+        success: false,
+        provider: 'nureply',
+        error: 'Email is on DNC list',
+      }
+    }
+
+    // 3. Transform sequence to Nureply format with dynamic variables
+    const customFields: Record<string, string> = {}
+    delivery.sequence.forEach((email, index) => {
+      const emailNum = index + 1
+      customFields[`email_${emailNum}_body`] = email.body
+      // Set subject for thread starters (emails 1 and 4)
+      if (emailNum === 1) {
+        customFields['thread_1_subject'] = email.subject
+      } else if (emailNum === 4) {
+        customFields['thread_2_subject'] = email.subject
+      }
+    })
+
+    // 4. Add lead to list with custom fields
+    const result = await nureply.addLeadsToList(config, leadListId, [{
+      email: delivery.lead.email,
+      first_name: delivery.lead.first_name,
+      last_name: delivery.lead.last_name,
+      company_name: delivery.lead.company_name,
+      linkedin_url: delivery.lead.linkedin_url,
+      other_variables: customFields,
+    }])
+
+    return {
+      success: result.success,
+      provider: 'nureply',
+      providerResponse: result,
+      error: result.success ? undefined : result.errors?.join(', '),
+    }
+  } catch (err) {
+    return {
+      success: false,
+      provider: 'nureply',
+      error: err instanceof Error ? err.message : 'Unknown error',
+    }
+  }
+}
+
+/**
+ * Helper to update tenant integration settings
+ */
+async function updateTenantIntegration(
+  tenantId: string,
+  integration: string,
+  updates: Record<string, unknown>
+): Promise<void> {
+  const { data: tenant } = await supabase
+    .from('tenants')
+    .select('settings')
+    .eq('id', tenantId)
+    .single()
+
+  if (!tenant) return
+
+  const currentSettings = (tenant.settings as TenantSettings) || {}
+  const currentIntegrations = currentSettings.integrations || {}
+  const currentIntegration = (currentIntegrations as Record<string, Record<string, unknown>>)[integration] || {}
+
+  await supabase
+    .from('tenants')
+    .update({
+      settings: {
+        ...currentSettings,
+        integrations: {
+          ...currentIntegrations,
+          [integration]: {
+            ...currentIntegration,
+            ...updates,
+          },
+        },
+      },
+    })
+    .eq('id', tenantId)
+}
+
+/**
  * Zapmail adapter - placeholder for future implementation
  */
 async function deliverViaZapmail(_delivery: EmailSequenceDelivery): Promise<DeliveryResult> {
@@ -192,15 +340,84 @@ async function deliverViaInstantly(_delivery: EmailSequenceDelivery): Promise<De
 // ============================================================================
 
 /**
- * HeyReach adapter - placeholder for future implementation
+ * HeyReach adapter - LinkedIn automation
  */
-async function deliverViaHeyReach(_delivery: LinkedInMessageDelivery): Promise<DeliveryResult> {
-  // TODO: Implement HeyReach integration
-  console.log('[DeliveryRouter] HeyReach delivery not yet implemented')
-  return {
-    success: false,
-    provider: 'heyreach',
-    error: 'HeyReach integration not yet implemented',
+async function deliverViaHeyReach(
+  tenantId: string,
+  settings: TenantSettings,
+  delivery: LinkedInMessageDelivery
+): Promise<DeliveryResult> {
+  try {
+    const heyreachConfig = settings.integrations?.heyreach
+    if (!heyreachConfig?.api_key) {
+      return {
+        success: false,
+        provider: 'heyreach',
+        error: 'HeyReach API key not configured',
+      }
+    }
+
+    const config = { apiKey: heyreachConfig.api_key }
+
+    // 1. Get or use configured campaign
+    let campaignId = heyreachConfig.campaign_id
+    if (!campaignId) {
+      // Find an active campaign or fail
+      const activeCampaigns = await heyreach.getActiveCampaigns(config)
+      if (activeCampaigns.length === 0) {
+        return {
+          success: false,
+          provider: 'heyreach',
+          error: 'No active HeyReach campaign found. Please create one in HeyReach first.',
+        }
+      }
+      campaignId = activeCampaigns[0].id
+      // Save for future use
+      await updateTenantIntegration(tenantId, 'heyreach', { campaign_id: campaignId })
+    }
+
+    // 2. Format the lead for HeyReach
+    const lead = heyreach.formatLeadForHeyReach(delivery.lead)
+    if (!lead) {
+      return {
+        success: false,
+        provider: 'heyreach',
+        error: 'Lead missing LinkedIn URL',
+      }
+    }
+
+    // 3. Add custom fields for message personalization
+    if (delivery.messages?.length) {
+      lead.customFields = {}
+      delivery.messages.forEach((msg, i) => {
+        lead.customFields![`message_${i + 1}`] = msg.message
+      })
+    }
+
+    // 4. Add lead to campaign
+    const result = await heyreach.addLeadToCampaign(config, {
+      campaignId,
+      linkedinUrl: lead.linkedinUrl,
+      firstName: lead.firstName,
+      lastName: lead.lastName,
+      companyName: lead.companyName,
+      jobTitle: lead.jobTitle,
+      email: lead.email,
+      customFields: lead.customFields,
+    })
+
+    return {
+      success: result.success,
+      provider: 'heyreach',
+      providerResponse: result,
+      error: result.error,
+    }
+  } catch (err) {
+    return {
+      success: false,
+      provider: 'heyreach',
+      error: err instanceof Error ? err.message : 'Unknown error',
+    }
   }
 }
 
@@ -236,6 +453,8 @@ export async function deliverEmail(
   switch (provider) {
     case 'smartlead':
       return deliverViaSmartlead(delivery)
+    case 'nureply':
+      return deliverViaNureply(tenantId, settings, delivery)
     case 'zapmail':
       return deliverViaZapmail(delivery)
     case 'instantly':
@@ -270,12 +489,12 @@ export async function deliverLinkedIn(
 
   switch (provider) {
     case 'heyreach':
-      return deliverViaHeyReach(delivery)
+      return deliverViaHeyReach(tenantId, settings, delivery)
     case 'phantombuster':
       return deliverViaPhantomBuster(delivery)
     default:
       console.warn(`[DeliveryRouter] Unknown LinkedIn provider: ${provider}, falling back to heyreach`)
-      return deliverViaHeyReach(delivery)
+      return deliverViaHeyReach(tenantId, settings, delivery)
   }
 }
 

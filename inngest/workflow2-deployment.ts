@@ -25,6 +25,7 @@ import {
 } from '../src/lib/linkedin-analyzer'
 import { scoreIntent, type EnhancedIntentScore, type IntentData } from '../src/lib/intent-scorer'
 import { researchLead, type ResearchResult } from '../src/agents/agent2-research'
+import { calculateTriggerReadiness, type TriggerReadinessResult, type TriggerReadinessInput } from '../src/lib/trigger-readiness'
 
 interface ReadyForDeploymentEvent {
   data: {
@@ -510,37 +511,106 @@ export const researchPipeline = inngest.createFunction(
       })
     })
 
-    // Emit event for next workflow (enhanced with outreach guidance)
-    await step.sendEvent('trigger-message-crafting', {
-      name: 'lead.research-complete',
-      data: {
-        lead_id: lead.id,
-        tenant_id: lead.tenant_id,
-        persona_match: research.persona_match,
-        top_triggers: research.triggers.slice(0, 3),
-        messaging_angles: research.messaging_angles,
-        qualification: eventData.qualification,
-        // Enhanced data for Agent 3
-        enhanced: {
-          intentScore: intentScore.score,
-          intentTier: intentScore.tier,
-          painSignals: allPainSignals.slice(0, 3).map((p) => ({
-            topic: p.topic,
-            confidence: p.confidence,
-          })),
-          outreachGuidance,
+    // ========================================
+    // TRIGGER READINESS GATE
+    // ========================================
+    // Build a minimal context profile for trigger readiness scoring
+    const triggerReadiness = await step.run('check-trigger-readiness', async () => {
+      // Determine lead source from how it entered the pipeline
+      const leadSource = lead.source || 'apollo'
+
+      // Build minimal context profile for trigger readiness check
+      const contextProfile: TriggerReadinessInput = {
+        outreachGuidance: {
+          urgency: outreachGuidance.urgency,
           compositeTriggers,
-          bestHook: bestHook
-            ? { topic: bestHook.topic, angle: bestHook.angle, postSnippet: bestHook.postSnippet }
-            : null,
         },
-      },
+        engagementStrategy: {
+          triggerEvent: research.triggers[0]?.fact || null,
+          urgencyLevel: outreachGuidance.urgency,
+        },
+      }
+
+      const readiness = calculateTriggerReadiness(contextProfile, leadSource)
+
+      console.log(`[Trigger Readiness] ${lead.email}:`)
+      console.log(`  - Score: ${readiness.score}/100 (threshold: 50)`)
+      console.log(`  - Tier: ${readiness.tier}`)
+      console.log(`  - Ready for outreach: ${readiness.isReadyForOutreach}`)
+      console.log(`  - Strongest trigger: ${readiness.strongestTrigger || 'None'}`)
+      if (!readiness.isReadyForOutreach) {
+        console.log(`  - Missing: ${readiness.missingTriggers.join(', ')}`)
+      }
+
+      return readiness
     })
 
-    console.log(`[Workflow 2] Completed for: ${lead.email}`)
+    // Gate progression based on trigger readiness
+    if (triggerReadiness.isReadyForOutreach) {
+      // Emit event for next workflow (enhanced with outreach guidance)
+      await step.sendEvent('trigger-message-crafting', {
+        name: 'lead.research-complete',
+        data: {
+          lead_id: lead.id,
+          tenant_id: lead.tenant_id,
+          persona_match: research.persona_match,
+          top_triggers: research.triggers.slice(0, 3),
+          messaging_angles: research.messaging_angles,
+          qualification: eventData.qualification,
+          // Enhanced data for Agent 3
+          enhanced: {
+            intentScore: intentScore.score,
+            intentTier: intentScore.tier,
+            painSignals: allPainSignals.slice(0, 3).map((p) => ({
+              topic: p.topic,
+              confidence: p.confidence,
+            })),
+            outreachGuidance,
+            compositeTriggers,
+            bestHook: bestHook
+              ? { topic: bestHook.topic, angle: bestHook.angle, postSnippet: bestHook.postSnippet }
+              : null,
+            triggerReadiness: {
+              score: triggerReadiness.score,
+              tier: triggerReadiness.tier,
+              strongestTrigger: triggerReadiness.strongestTrigger,
+            },
+          },
+        },
+      })
+
+      console.log(`[Workflow 2] Completed for: ${lead.email} - proceeding to sequencing`)
+    } else {
+      // Not ready for outreach - put lead on hold
+      await step.run('hold-lead-insufficient-triggers', async () => {
+        await supabase
+          .from('leads')
+          .update({
+            status: 'holding',
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', lead.id)
+
+        // Log the hold decision
+        await supabase.from('engagement_log').insert({
+          lead_id: lead.id,
+          tenant_id: lead.tenant_id,
+          event_type: 'lead.held_insufficient_triggers',
+          metadata: {
+            trigger_score: triggerReadiness.score,
+            trigger_tier: triggerReadiness.tier,
+            missing_triggers: triggerReadiness.missingTriggers,
+            reasons: triggerReadiness.reasons,
+            will_retry_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(), // 7 days
+          },
+        })
+
+        console.log(`[Workflow 2] Lead ${lead.email} held - insufficient triggers (score: ${triggerReadiness.score})`)
+      })
+    }
 
     return {
-      status: 'completed',
+      status: triggerReadiness.isReadyForOutreach ? 'completed' : 'held',
       lead_id: lead.id,
       persona: research.persona_match.type,
       decision_level: research.persona_match.decision_level,
@@ -550,6 +620,14 @@ export const researchPipeline = inngest.createFunction(
       intent_tier: intentScore.tier,
       pain_signals: allPainSignals.length,
       outreach_urgency: outreachGuidance.urgency,
+      // Trigger readiness gate result
+      trigger_readiness: {
+        score: triggerReadiness.score,
+        tier: triggerReadiness.tier,
+        ready_for_outreach: triggerReadiness.isReadyForOutreach,
+        strongest_trigger: triggerReadiness.strongestTrigger,
+        missing_triggers: triggerReadiness.missingTriggers,
+      },
       waterfall_steps: {
         intent_scoring: true,
         personal_linkedin: !!linkedinProfile,

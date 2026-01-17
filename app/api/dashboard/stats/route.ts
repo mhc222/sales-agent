@@ -114,6 +114,9 @@ export async function GET() {
       { status: 'meeting_booked', label: 'Meetings', count: meetingCount },
     ]
 
+    // Get holding leads count
+    const holdingCount = countByStatus['holding'] || 0
+
     return NextResponse.json({
       stats: {
         totalLeads,
@@ -122,6 +125,7 @@ export async function GET() {
         replies: repliedCount || 0,
         meetings: meetingCount,
         pendingReview: pendingReviewCount || 0,
+        holdingLeads: holdingCount,
       },
       pipeline,
       activity,

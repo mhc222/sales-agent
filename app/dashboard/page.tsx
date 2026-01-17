@@ -14,6 +14,7 @@ interface DashboardStats {
   replies: number
   meetings: number
   pendingReview: number
+  holdingLeads: number
 }
 
 interface PipelineItem {
@@ -264,6 +265,27 @@ export default function DashboardPage() {
             </Link>
           )}
 
+          {/* Holding Leads Card */}
+          {stats.holdingLeads > 0 && (
+            <Link href="/dashboard/holding" className="block">
+              <div className="bg-gray-500/10 border border-gray-500/20 rounded-lg p-4 hover:bg-gray-500/15 transition-colors">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-gray-500/20 rounded-lg">
+                    <svg className="w-5 h-5 text-gray-400" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium text-gray-300">
+                      {stats.holdingLeads} lead{stats.holdingLeads !== 1 ? 's' : ''} on hold
+                    </p>
+                    <p className="text-xs text-gray-400">Waiting for stronger triggers</p>
+                  </div>
+                </div>
+              </div>
+            </Link>
+          )}
+
           {/* Quick Links */}
           <div className="bg-jsb-navy-light border border-jsb-navy-lighter rounded-lg p-4">
             <h3 className="text-sm font-medium text-gray-400 mb-3">Quick Actions</h3>
@@ -276,6 +298,15 @@ export default function DashboardPage() {
                   <path strokeLinecap="round" strokeLinejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z" />
                 </svg>
                 <span className="text-sm text-gray-300">View all leads</span>
+              </Link>
+              <Link
+                href="/dashboard/holding"
+                className="flex items-center gap-3 p-2 rounded-lg hover:bg-jsb-navy-lighter transition-colors"
+              >
+                <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <span className="text-sm text-gray-300">View holding leads</span>
               </Link>
               <Link
                 href="/sequences"

@@ -12,11 +12,11 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json()
-    const { provider, apiKey } = body
+    const { provider, apiKey, apiUrl } = body
 
-    if (!provider || !apiKey) {
+    if (!provider) {
       return NextResponse.json(
-        { success: false, error: 'Provider and API key are required' },
+        { success: false, error: 'Provider is required' },
         { status: 400 }
       )
     }
@@ -27,6 +27,9 @@ export async function POST(request: Request) {
 
     switch (provider) {
       case 'smartlead': {
+        if (!apiKey) {
+          return NextResponse.json({ success: false, error: 'API key is required' }, { status: 400 })
+        }
         const res = await fetch('https://server.smartlead.ai/api/v1/campaigns?api_key=' + apiKey)
         success = res.ok
         if (!success) {
@@ -36,7 +39,27 @@ export async function POST(request: Request) {
         break
       }
 
+      case 'nureply': {
+        if (!apiKey) {
+          return NextResponse.json({ success: false, error: 'API key is required' }, { status: 400 })
+        }
+        const res = await fetch('https://api.nureply.com/v3/user-api/validate', {
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': apiKey,
+          }
+        })
+        success = res.ok
+        if (!success) {
+          message = 'Invalid API key'
+        }
+        break
+      }
+
       case 'instantly': {
+        if (!apiKey) {
+          return NextResponse.json({ success: false, error: 'API key is required' }, { status: 400 })
+        }
         const res = await fetch('https://api.instantly.ai/api/v1/account/status', {
           headers: { 'Authorization': `Bearer ${apiKey}` }
         })
@@ -48,6 +71,9 @@ export async function POST(request: Request) {
       }
 
       case 'apollo': {
+        if (!apiKey) {
+          return NextResponse.json({ success: false, error: 'API key is required' }, { status: 400 })
+        }
         const res = await fetch('https://api.apollo.io/v1/auth/health', {
           method: 'POST',
           headers: {
@@ -64,12 +90,40 @@ export async function POST(request: Request) {
       }
 
       case 'heyreach': {
-        const res = await fetch('https://api.heyreach.io/api/v1/user', {
-          headers: { 'X-API-KEY': apiKey }
+        if (!apiKey) {
+          return NextResponse.json({ success: false, error: 'API key is required' }, { status: 400 })
+        }
+        const res = await fetch('https://api.heyreach.io/api/v1/campaigns?page=0&limit=1', {
+          headers: { 'X-API-Key': apiKey }
         })
         success = res.ok
         if (!success) {
           message = 'Invalid API key'
+        }
+        break
+      }
+
+      case 'audiencelab': {
+        if (!apiUrl || !apiKey) {
+          return NextResponse.json(
+            { success: false, error: 'API URL and API key are required' },
+            { status: 400 }
+          )
+        }
+        try {
+          const res = await fetch(apiUrl, {
+            method: 'GET',
+            headers: {
+              'X-API-Key': apiKey,
+              'Content-Type': 'application/json',
+            },
+          })
+          success = res.ok
+          if (!success) {
+            message = `API returned ${res.status}: ${res.statusText}`
+          }
+        } catch (err) {
+          message = err instanceof Error ? err.message : 'Failed to connect'
         }
         break
       }

@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { jsb, cn } from '@/lib/styles'
 
 type EmailProviderData = {
-  provider: 'smartlead' | 'instantly' | ''
+  provider: 'smartlead' | 'nureply' | 'instantly' | ''
   apiKey: string
   campaignId: string
 }
@@ -20,10 +20,20 @@ const providers = [
   {
     id: 'smartlead' as const,
     name: 'Smartlead',
-    description: 'AI-powered cold email platform',
+    description: 'AI-powered cold email platform with real-time webhooks',
     logo: (
       <svg className="w-6 h-6" viewBox="0 0 24 24" fill="currentColor">
         <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
+      </svg>
+    ),
+  },
+  {
+    id: 'nureply' as const,
+    name: 'Nureply',
+    description: 'Cold email with built-in warmup & DNC',
+    logo: (
+      <svg className="w-6 h-6" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z" />
       </svg>
     ),
   },
@@ -113,7 +123,7 @@ export default function EmailProviderStep({ data, onChange, onNext, onBack }: Pr
         <div className="space-y-4 animate-in fade-in duration-200">
           <div>
             <label htmlFor="apiKey" className={cn(jsb.label, 'block mb-2')}>
-              {data.provider === 'smartlead' ? 'Smartlead' : 'Instantly'} API Key
+              {data.provider === 'smartlead' ? 'Smartlead' : data.provider === 'nureply' ? 'Nureply' : 'Instantly'} API Key
             </label>
             <input
               id="apiKey"
@@ -124,11 +134,11 @@ export default function EmailProviderStep({ data, onChange, onNext, onBack }: Pr
               placeholder="Enter your API key"
             />
             <p className="text-xs text-gray-500 mt-1.5">
-              Find this in your {data.provider === 'smartlead' ? 'Smartlead' : 'Instantly'} dashboard under Settings &gt; API
+              Find this in your {data.provider === 'smartlead' ? 'Smartlead' : data.provider === 'nureply' ? 'Nureply' : 'Instantly'} dashboard under Settings &gt; API
             </p>
           </div>
 
-          {data.provider === 'smartlead' && (
+          {(data.provider === 'smartlead' || data.provider === 'nureply') && (
             <div>
               <label htmlFor="campaignId" className={cn(jsb.label, 'block mb-2')}>
                 Default Campaign ID <span className="text-gray-500">(optional)</span>

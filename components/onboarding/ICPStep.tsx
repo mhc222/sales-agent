@@ -9,6 +9,12 @@ import type {
   ICPPriority,
 } from '@/src/lib/tenant-settings'
 
+type ICPChange = {
+  category: string
+  description: string
+  reason: string
+}
+
 type ICPData = {
   accountCriteria: AccountCriteria | null
   personas: ICPPersona[]
@@ -16,6 +22,8 @@ type ICPData = {
   researchStatus: 'idle' | 'loading' | 'complete' | 'error'
   researchError?: string
   marketResearch: string
+  reconciled?: boolean
+  changes?: ICPChange[]
 }
 
 type Props = {
@@ -109,6 +117,9 @@ export default function ICPStep({
 }: Props) {
   const [researchStage, setResearchStage] = useState('Analyzing website...')
   const [showMarketResearch, setShowMarketResearch] = useState(false)
+  const [isReconciling, setIsReconciling] = useState(false)
+  const [reconcileStage, setReconcileStage] = useState('')
+  const [showChanges, setShowChanges] = useState(false)
 
   // Trigger research when component mounts if not already done
   useEffect(() => {
@@ -176,6 +187,87 @@ export default function ICPStep({
         researchStatus: 'error',
         researchError: err instanceof Error ? err.message : 'Research failed',
       })
+    }
+  }
+
+  async function runReconciliation() {
+    if (!data.marketResearch.trim() || !data.accountCriteria) return
+
+    setIsReconciling(true)
+    setReconcileStage('Starting reconciliation...')
+
+    try {
+      const response = await fetch('/api/onboarding/reconcile-icp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          companyName,
+          marketResearch: data.marketResearch,
+          currentICP: {
+            accountCriteria: data.accountCriteria,
+            personas: data.personas,
+            triggers: data.triggers,
+          },
+        }),
+      })
+
+      if (!response.ok) {
+        const error = await response.json()
+        throw new Error(error.message || 'Reconciliation failed')
+      }
+
+      // Handle streaming response for progress updates
+      const reader = response.body?.getReader()
+      const decoder = new TextDecoder()
+      let result = ''
+
+      if (reader) {
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+
+          const chunk = decoder.decode(value, { stream: true })
+          result += chunk
+
+          // Parse progress updates (lines starting with "stage:")
+          const lines = chunk.split('\n')
+          for (const line of lines) {
+            if (line.startsWith('stage:')) {
+              setReconcileStage(line.replace('stage:', '').trim())
+            }
+          }
+        }
+      }
+
+      // Parse final result (last line should be JSON)
+      const lines = result.split('\n').filter((l) => l.trim())
+      const lastLine = lines[lines.length - 1]
+      const reconcileResult = JSON.parse(lastLine)
+
+      if (reconcileResult.error) {
+        throw new Error(reconcileResult.error)
+      }
+
+      onChange({
+        ...data,
+        accountCriteria: reconcileResult.accountCriteria,
+        personas: reconcileResult.personas,
+        triggers: reconcileResult.triggers,
+        reconciled: true,
+        changes: reconcileResult.changes || [],
+      })
+
+      // Show changes if any were made
+      if (reconcileResult.changes?.length > 0) {
+        setShowChanges(true)
+      }
+    } catch (err) {
+      console.error('Reconciliation error:', err)
+      // Don't update data on error, just show message
+      alert(err instanceof Error ? err.message : 'Reconciliation failed')
+    } finally {
+      setIsReconciling(false)
+      setReconcileStage('')
     }
   }
 
@@ -297,6 +389,57 @@ export default function ICPStep({
         </div>
       </CollapsibleSection>
 
+      {/* Changes Display (after reconciliation) */}
+      {data.reconciled && data.changes && data.changes.length > 0 && (
+        <div className={cn(jsb.card, 'p-4 border-green-500/30 bg-green-500/5')}>
+          <button
+            onClick={() => setShowChanges(!showChanges)}
+            className="w-full flex items-center justify-between"
+          >
+            <div className="flex items-center gap-2">
+              <svg className="w-5 h-5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <div>
+                <h3 className={cn(jsb.heading, 'text-base text-green-400')}>
+                  ICP Updated with Your Knowledge
+                </h3>
+                <p className="text-sm text-gray-400">
+                  {data.changes.length} changes applied from your market research
+                </p>
+              </div>
+            </div>
+            <svg
+              className={cn(
+                'w-5 h-5 text-gray-400 transition-transform',
+                showChanges && 'rotate-180'
+              )}
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
+          {showChanges && (
+            <div className="mt-4 pt-4 border-t border-green-500/20 space-y-3">
+              {data.changes.map((change, index) => (
+                <div key={index} className="p-3 rounded-lg bg-jsb-navy-lighter/50">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-xs px-2 py-0.5 rounded bg-green-500/20 text-green-400 capitalize">
+                      {change.category}
+                    </span>
+                  </div>
+                  <p className="text-sm text-gray-300">{change.description}</p>
+                  <p className="text-xs text-gray-500 mt-1">Because: {change.reason}</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Market Research (Optional) */}
       <div className={cn(jsb.card, 'p-4')}>
         <button
@@ -304,9 +447,13 @@ export default function ICPStep({
           className="w-full flex items-center justify-between"
         >
           <div>
-            <h3 className={cn(jsb.heading, 'text-base')}>Add Market Research</h3>
+            <h3 className={cn(jsb.heading, 'text-base')}>
+              {data.reconciled ? 'Edit Market Research' : 'Add Market Research'}
+            </h3>
             <p className="text-sm text-gray-500">
-              Optional: Paste case studies, customer stories, competitor notes
+              {data.reconciled
+                ? 'Add more knowledge to further refine your ICP'
+                : 'Paste case studies, customer stories, competitor notes - AI will analyze and prefer your knowledge'}
             </p>
           </div>
           <svg
@@ -323,16 +470,54 @@ export default function ICPStep({
           </svg>
         </button>
         {showMarketResearch && (
-          <div className="mt-4 pt-4 border-t border-jsb-navy-lighter">
+          <div className="mt-4 pt-4 border-t border-jsb-navy-lighter space-y-4">
             <textarea
               value={data.marketResearch}
-              onChange={(e) => onChange({ ...data, marketResearch: e.target.value })}
+              onChange={(e) => onChange({ ...data, marketResearch: e.target.value, reconciled: false })}
               className={cn(jsb.input, 'w-full px-4 py-3 min-h-[200px]')}
-              placeholder="Paste any unstructured text here - case studies, sales notes, competitor intel, customer stories, etc. We'll parse and organize it automatically."
+              placeholder="Paste any unstructured text here - case studies, sales notes, competitor intel, customer stories, etc.
+
+The AI will:
+• Parse and extract insights from your text
+• Compare against the AI-generated ICP
+• Update personas, triggers, and criteria with YOUR knowledge
+• Prefer human knowledge where there are conflicts"
+              disabled={isReconciling}
             />
-            <p className="text-xs text-gray-500 mt-2">
-              This data will be stored in your tenant-specific knowledge base for personalization.
-            </p>
+
+            {/* Reconciliation button */}
+            {data.marketResearch.trim() && (
+              <div className="flex items-center gap-4">
+                <button
+                  onClick={runReconciliation}
+                  disabled={isReconciling}
+                  className={cn(
+                    jsb.buttonPrimary,
+                    'px-6 py-2.5 flex items-center gap-2',
+                    isReconciling && 'opacity-50 cursor-not-allowed'
+                  )}
+                >
+                  {isReconciling ? (
+                    <>
+                      <div className="w-4 h-4 border-2 border-white/20 rounded-full animate-spin border-t-white" />
+                      <span>{reconcileStage || 'Analyzing...'}</span>
+                    </>
+                  ) : (
+                    <>
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                      </svg>
+                      <span>{data.reconciled ? 'Re-analyze & Update ICP' : 'Analyze & Apply to ICP'}</span>
+                    </>
+                  )}
+                </button>
+                {!isReconciling && (
+                  <p className="text-xs text-gray-500">
+                    AI will parse your input and update the ICP above
+                  </p>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>

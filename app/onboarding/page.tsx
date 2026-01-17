@@ -34,6 +34,9 @@ type OnboardingData = {
     researchError?: string
     // Optional market research (unstructured text)
     marketResearch: string
+    // Reconciliation state
+    reconciled?: boolean
+    changes?: Array<{ category: string; description: string; reason: string }>
   }
   channels: {
     outreachChannels: ('email' | 'linkedin')[]

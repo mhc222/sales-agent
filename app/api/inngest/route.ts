@@ -14,10 +14,12 @@ import {
 } from '../../../inngest/workflow5-email-responses'
 import { learningAnalysis, manualLearningAnalysis } from '../../../inngest/workflow6-learning'
 import {
-  cronDailyIntent,
-  cronDailyVisitors,
+  cronDailyAudienceLab,
   cronDailyStats,
   cronLearningAnalysis,
+  cronApolloSavedSearches,
+  cronNureplySync,
+  cronHeyReachSync,
 } from '../../../inngest/cron-jobs'
 
 // Determine if we're in development mode
@@ -43,10 +45,12 @@ export const { GET, POST, PUT } = serve({
     learningAnalysis,            // Workflow 6: Daily Learning Analysis
     manualLearningAnalysis,      // Workflow 6: Manual Learning Analysis (event)
     // Scheduled cron jobs
-    cronDailyIntent,             // Cron: Daily intent data ingestion (10am UTC)
-    cronDailyVisitors,           // Cron: Daily pixel visitor ingestion (9am UTC)
+    cronDailyAudienceLab,        // Cron: Daily AudienceLab ingestion - all sources per tenant (9am UTC)
     cronDailyStats,              // Cron: Daily stats & Slack summary (8am UTC)
     cronLearningAnalysis,        // Cron: Trigger learning analysis (6am UTC)
+    cronApolloSavedSearches,     // Cron: Apollo saved searches (11am UTC)
+    cronNureplySync,             // Cron: Nureply engagement polling (every 15 min)
+    cronHeyReachSync,            // Cron: HeyReach LinkedIn polling (every 15 min)
   ],
   // In dev mode, don't use signing key (handled by Inngest dev server)
   ...(isDev ? {} : {
