@@ -8,7 +8,11 @@
  * - Title/Seniority: 0-20 pts
  * - Company Size: 0-15 pts
  * - Data Quality: 0-20 pts
+ *
+ * Supports dynamic targeting preferences to adjust scoring weights.
  */
+
+import type { TargetingPreference } from './tenant-settings'
 
 export interface IntentLeadData {
   // Personal
@@ -28,6 +32,11 @@ export interface IntentLeadData {
   companyRevenue?: number | string
 }
 
+/** Scoring options with optional targeting preferences */
+export interface ScoringOptions {
+  targetingPreferences?: TargetingPreference[]
+}
+
 export interface IntentScoreResult {
   totalScore: number
   breakdown: {
@@ -37,6 +46,11 @@ export interface IntentScoreResult {
     companySize: number
     dataQuality: number
   }
+  preferenceAdjustments?: {
+    field: string
+    adjustment: number
+    reason: string
+  }[]
   tier: 'strong' | 'medium' | 'weak'
   reasoning: string[]
 }
@@ -358,14 +372,14 @@ function isBusinessEmail(email: string): boolean {
 // MAIN SCORING FUNCTION
 // ============================================================================
 
-export function calculateIntentScore(lead: IntentLeadData): IntentScoreResult {
+export function calculateIntentScore(lead: IntentLeadData, options?: ScoringOptions): IntentScoreResult {
   const industryResult = scoreIndustry(lead.companyIndustry)
   const revenueResult = scoreRevenue(lead.companyRevenue)
   const titleResult = scoreTitle(lead.jobTitle, lead.seniority)
   const sizeResult = scoreCompanySize(lead.companyEmployeeCount)
   const dataQualityResult = scoreDataQuality(lead)
 
-  const totalScore =
+  let totalScore =
     industryResult.score +
     revenueResult.score +
     titleResult.score +
@@ -388,6 +402,23 @@ export function calculateIntentScore(lead: IntentLeadData): IntentScoreResult {
     `Data Quality (${dataQualityResult.score}/20): ${dataQualityResult.reason}`,
   ]
 
+  // Apply targeting preferences if provided
+  const preferenceAdjustments: IntentScoreResult['preferenceAdjustments'] = []
+
+  if (options?.targetingPreferences && options.targetingPreferences.length > 0) {
+    for (const pref of options.targetingPreferences) {
+      const adjustment = applyTargetingPreference(lead, pref)
+      if (adjustment.adjustment !== 0) {
+        preferenceAdjustments.push(adjustment)
+        totalScore += adjustment.adjustment
+        reasoning.push(`Preference (${adjustment.field}): ${adjustment.reason} (${adjustment.adjustment > 0 ? '+' : ''}${adjustment.adjustment})`)
+      }
+    }
+  }
+
+  // Cap score between 0 and 100
+  totalScore = Math.max(0, Math.min(100, totalScore))
+
   let tier: 'strong' | 'medium' | 'weak'
   if (totalScore >= 70) {
     tier = 'strong'
@@ -400,9 +431,185 @@ export function calculateIntentScore(lead: IntentLeadData): IntentScoreResult {
   return {
     totalScore,
     breakdown,
+    preferenceAdjustments: preferenceAdjustments.length > 0 ? preferenceAdjustments : undefined,
     tier,
     reasoning,
   }
+}
+
+// ============================================================================
+// TARGETING PREFERENCE APPLICATION
+// ============================================================================
+
+/**
+ * Apply a single targeting preference to a lead and return the score adjustment
+ */
+function applyTargetingPreference(
+  lead: IntentLeadData,
+  pref: TargetingPreference
+): { field: string; adjustment: number; reason: string } {
+  const weight = pref.weight || 1.0
+  const preference = pref.preference.toLowerCase()
+
+  // Map fields to lead data
+  const fieldValue = getFieldValue(lead, pref.field)
+
+  if (fieldValue === null || fieldValue === undefined) {
+    return { field: pref.field, adjustment: 0, reason: 'No data for this field' }
+  }
+
+  // Parse preference and check for match
+  const match = checkPreferenceMatch(fieldValue, preference, pref.field)
+
+  if (match.matches) {
+    // Calculate adjustment based on weight
+    // Weight of 1.0 = no change, 1.5 = +50% of base points, 0.5 = -50% of base points
+    const basePoints = getBasePointsForField(pref.field)
+    const adjustment = Math.round(basePoints * (weight - 1.0))
+
+    return {
+      field: pref.field,
+      adjustment,
+      reason: `${match.reason} (weight: ${weight}x)`,
+    }
+  }
+
+  return { field: pref.field, adjustment: 0, reason: 'No preference match' }
+}
+
+/**
+ * Get the value of a field from lead data
+ */
+function getFieldValue(lead: IntentLeadData, field: string): string | number | null {
+  const fieldMap: Record<string, string | number | undefined> = {
+    // Personal fields
+    job_title: lead.jobTitle,
+    seniority: lead.seniority,
+    email: lead.email,
+    // Company fields
+    company_name: lead.companyName,
+    company_size: lead.companyEmployeeCount,
+    employee_count: lead.companyEmployeeCount,
+    industry: lead.companyIndustry,
+    company_industry: lead.companyIndustry,
+    revenue_range: lead.companyRevenue,
+    company_revenue: lead.companyRevenue,
+    location: undefined, // Would need to be added to IntentLeadData
+    country: undefined,
+    // Data quality
+    linkedin_url: lead.linkedinUrl,
+    company_linkedin_url: lead.companyLinkedinUrl,
+  }
+
+  const value = fieldMap[field]
+  if (value === undefined) return null
+  return typeof value === 'string' ? value : value
+}
+
+/**
+ * Check if a field value matches a preference
+ */
+function checkPreferenceMatch(
+  value: string | number,
+  preference: string,
+  field: string
+): { matches: boolean; reason: string } {
+  const strValue = String(value).toLowerCase()
+
+  // Seniority preferences
+  if (field === 'seniority' || field === 'job_title') {
+    // Check for level indicators
+    if (preference.includes('director') && (strValue.includes('director') || strValue.includes('vp') || strValue.includes('vice president') || strValue.includes('chief') || strValue.includes('c-level'))) {
+      return { matches: true, reason: 'Director+ level match' }
+    }
+    if (preference.includes('manager') && strValue.includes('manager')) {
+      return { matches: true, reason: 'Manager level match' }
+    }
+    if (preference.includes('executive') && (strValue.includes('chief') || strValue.includes('c-level') || strValue.includes('ceo') || strValue.includes('cmo') || strValue.includes('cfo') || strValue.includes('coo'))) {
+      return { matches: true, reason: 'Executive level match' }
+    }
+    if (preference.includes('founder') && strValue.includes('founder')) {
+      return { matches: true, reason: 'Founder match' }
+    }
+    // Generic keyword check
+    const keywords = preference.split(/[,\s]+/).filter(k => k.length > 2)
+    for (const keyword of keywords) {
+      if (strValue.includes(keyword)) {
+        return { matches: true, reason: `Title contains "${keyword}"` }
+      }
+    }
+  }
+
+  // Company size preferences
+  if (field === 'company_size' || field === 'employee_count') {
+    const numValue = typeof value === 'number' ? value : parseEmployeeCountForPreference(String(value))
+    if (numValue !== null) {
+      // Check for range patterns like "50-200" or "under 100" or "over 500"
+      if (preference.includes('under') || preference.includes('less than') || preference.includes('<')) {
+        const match = preference.match(/(\d+)/)
+        if (match && numValue < parseInt(match[1])) {
+          return { matches: true, reason: `Under ${match[1]} employees` }
+        }
+      }
+      if (preference.includes('over') || preference.includes('more than') || preference.includes('>')) {
+        const match = preference.match(/(\d+)/)
+        if (match && numValue > parseInt(match[1])) {
+          return { matches: true, reason: `Over ${match[1]} employees` }
+        }
+      }
+      // Range pattern: 50-200
+      const rangeMatch = preference.match(/(\d+)\s*-\s*(\d+)/)
+      if (rangeMatch) {
+        const min = parseInt(rangeMatch[1])
+        const max = parseInt(rangeMatch[2])
+        if (numValue >= min && numValue <= max) {
+          return { matches: true, reason: `${min}-${max} employee range` }
+        }
+      }
+    }
+  }
+
+  // Industry preferences
+  if (field === 'industry' || field === 'company_industry') {
+    const keywords = preference.split(/[,\s]+/).filter(k => k.length > 2)
+    for (const keyword of keywords) {
+      if (strValue.includes(keyword)) {
+        return { matches: true, reason: `Industry contains "${keyword}"` }
+      }
+    }
+  }
+
+  return { matches: false, reason: '' }
+}
+
+/**
+ * Get base points for a field (used to calculate weighted adjustments)
+ */
+function getBasePointsForField(field: string): number {
+  const pointsMap: Record<string, number> = {
+    industry: 25,
+    company_industry: 25,
+    revenue_range: 20,
+    company_revenue: 20,
+    job_title: 20,
+    seniority: 20,
+    company_size: 15,
+    employee_count: 15,
+  }
+  return pointsMap[field] || 10
+}
+
+/**
+ * Parse employee count from string (helper for preference matching)
+ */
+function parseEmployeeCountForPreference(count: string): number | null {
+  const str = count.toString().toLowerCase().replace(/[,+]/g, '')
+  const rangeMatch = str.match(/(\d+)\s*-\s*(\d+)/)
+  if (rangeMatch) {
+    return (parseInt(rangeMatch[1]) + parseInt(rangeMatch[2])) / 2
+  }
+  const num = parseInt(str)
+  return isNaN(num) ? null : num
 }
 
 // ============================================================================

@@ -239,11 +239,12 @@ export const cronDailyAudienceLab = inngest.createFunction(
               // Score and rank intent leads
               const autoResearchLimit = tenant.settings?.data_sources?.auto_research_limit ?? 20
               const minIntentScore = tenant.settings?.data_sources?.min_intent_score ?? 60
+              const targetingPreferences = tenant.settings?.targeting_preferences || []
 
               const scoredLeads = qualifiedVisitors
                 .map((visitor) => {
                   const intentData = mapVisitorToIntentLead(visitor)
-                  const scoreResult = calculateIntentScore(intentData)
+                  const scoreResult = calculateIntentScore(intentData, { targetingPreferences })
                   return {
                     visitor,
                     intentData,
@@ -251,6 +252,7 @@ export const cronDailyAudienceLab = inngest.createFunction(
                     tier: scoreResult.tier,
                     breakdown: scoreResult.breakdown,
                     reasoning: scoreResult.reasoning,
+                    preferenceAdjustments: scoreResult.preferenceAdjustments,
                   }
                 })
                 .filter((lead) => lead.score >= minIntentScore)
