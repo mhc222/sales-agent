@@ -70,12 +70,13 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(loginUrl)
   }
 
-  // Allow account and onboarding routes without checking onboarding status
+  // Allow account and onboarding routes for authenticated users
   if (pathname.startsWith(ACCOUNT_ROUTE) || pathname.startsWith(ONBOARDING_ROUTE)) {
     return response
   }
 
-  // Check if user has at least one completed brand
+  // For ALL other routes, check if user has a completed brand
+  // If not, always redirect to /account
   const { data: userTenants } = await supabase
     .from('user_tenants')
     .select('tenant:tenants(settings)')
@@ -88,7 +89,7 @@ export async function middleware(request: NextRequest) {
     return settings?.onboarding_completed === true
   })
 
-  // If no completed brands, redirect to account page to manage brands
+  // If no completed brands, redirect to account page
   if (!hasCompletedBrand) {
     return NextResponse.redirect(new URL('/account', request.url))
   }
