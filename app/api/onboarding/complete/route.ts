@@ -36,7 +36,57 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json()
-    const { company, icp, channels, emailProvider, apollo, audienceLab, linkedIn, dnc } = body
+    const { company, icp, channels, emailProvider, apollo, audienceLab, linkedIn, dnc, tenantId } = body
+
+    // Use service client for admin operations (bypasses RLS)
+    const serviceClient = createServiceClient()
+
+    // Check if we're updating an existing tenant (multi-brand flow)
+    // or creating a new one (first-time user or legacy flow)
+    let existingTenant: { id: string; name: string; slug: string } | null = null
+
+    if (tenantId) {
+      // Verify user has access to this tenant
+      const { data: userTenant } = await supabase
+        .from('user_tenants')
+        .select('tenant_id')
+        .eq('user_id', user.id)
+        .eq('tenant_id', tenantId)
+        .single()
+
+      if (userTenant) {
+        const { data: tenant } = await serviceClient
+          .from('tenants')
+          .select('id, name, slug, settings')
+          .eq('id', tenantId)
+          .single()
+
+        if (tenant && !tenant.settings?.onboarding_completed) {
+          existingTenant = tenant
+        }
+      }
+    } else {
+      // Check for any incomplete tenant for this user
+      const { data: userTenants } = await supabase
+        .from('user_tenants')
+        .select('tenant_id')
+        .eq('user_id', user.id)
+
+      if (userTenants && userTenants.length > 0) {
+        for (const ut of userTenants) {
+          const { data: tenant } = await serviceClient
+            .from('tenants')
+            .select('id, name, slug, settings')
+            .eq('id', ut.tenant_id)
+            .single()
+
+          if (tenant && !tenant.settings?.onboarding_completed) {
+            existingTenant = tenant
+            break
+          }
+        }
+      }
+    }
 
     // Validate required fields
     if (!company?.companyName || !company?.yourName || !company?.websiteUrl) {
@@ -73,10 +123,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'At least one data source (Apollo or AudienceLab) is required' }, { status: 400 })
     }
 
-    // Use service client for admin operations (bypasses RLS)
-    const serviceClient = createServiceClient()
-
-    // Create tenant
+    // Generate slug from company name
     const slug = company.companyName
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '-')
@@ -149,22 +196,66 @@ export async function POST(request: Request) {
       icp: icpConfig,
     }
 
-    const { data: tenant, error: tenantError } = await serviceClient
-      .from('tenants')
-      .insert({
-        name: company.companyName,
-        slug,
-        settings,
-      })
-      .select()
-      .single()
+    let tenant: { id: string; name: string; slug: string }
 
-    if (tenantError) {
-      console.error('Tenant creation error:', tenantError)
-      if (tenantError.code === '23505') {
-        return NextResponse.json({ error: 'A company with this name already exists' }, { status: 400 })
+    if (existingTenant) {
+      // Update existing tenant (multi-brand flow)
+      const { data: updatedTenant, error: updateError } = await serviceClient
+        .from('tenants')
+        .update({
+          name: company.companyName,
+          slug,
+          settings,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', existingTenant.id)
+        .select()
+        .single()
+
+      if (updateError || !updatedTenant) {
+        console.error('Tenant update error:', updateError)
+        if (updateError?.code === '23505') {
+          return NextResponse.json({ error: 'A company with this name already exists' }, { status: 400 })
+        }
+        return NextResponse.json({ error: 'Failed to update company' }, { status: 500 })
       }
-      return NextResponse.json({ error: 'Failed to create company' }, { status: 500 })
+
+      tenant = updatedTenant
+    } else {
+      // Create new tenant (first-time user flow)
+      const { data: newTenant, error: tenantError } = await serviceClient
+        .from('tenants')
+        .insert({
+          name: company.companyName,
+          slug,
+          settings,
+        })
+        .select()
+        .single()
+
+      if (tenantError || !newTenant) {
+        console.error('Tenant creation error:', tenantError)
+        if (tenantError?.code === '23505') {
+          return NextResponse.json({ error: 'A company with this name already exists' }, { status: 400 })
+        }
+        return NextResponse.json({ error: 'Failed to create company' }, { status: 500 })
+      }
+
+      tenant = newTenant
+
+      // Create user-tenant association (only for new tenants)
+      const { error: assocError } = await serviceClient
+        .from('user_tenants')
+        .insert({
+          user_id: user.id,
+          tenant_id: tenant.id,
+          role: 'owner',
+        })
+
+      if (assocError) {
+        console.error('User-tenant association error:', assocError)
+        return NextResponse.json({ error: 'Failed to link user to company' }, { status: 500 })
+      }
     }
 
     // Update user profile with name
@@ -172,20 +263,6 @@ export async function POST(request: Request) {
       .from('users')
       .update({ full_name: company.yourName })
       .eq('id', user.id)
-
-    // Create user-tenant association
-    const { error: assocError } = await serviceClient
-      .from('user_tenants')
-      .insert({
-        user_id: user.id,
-        tenant_id: tenant.id,
-        role: 'owner',
-      })
-
-    if (assocError) {
-      console.error('User-tenant association error:', assocError)
-      return NextResponse.json({ error: 'Failed to link user to company' }, { status: 500 })
-    }
 
     // Seed RAG documents from ICP data and AudienceLab sources
     await seedRAGDocuments(serviceClient, tenant.id, company, icp, audienceLab)

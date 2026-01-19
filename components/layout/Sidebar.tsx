@@ -3,6 +3,7 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { cn } from '../../lib/styles'
+import { BrandSwitcher } from './BrandSwitcher'
 
 // Navigation items configuration
 const navigation = [
@@ -192,6 +193,11 @@ export function Sidebar({ collapsed = false, onToggleCollapse, onNavClick }: Sid
             </div>
           )}
         </Link>
+      </div>
+
+      {/* Brand Switcher */}
+      <div className="px-3 py-3 border-b border-jsb-navy-lighter">
+        <BrandSwitcher collapsed={collapsed} />
       </div>
 
       {/* Main navigation */}
