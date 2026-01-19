@@ -124,10 +124,28 @@ export async function POST(request: Request) {
     }
 
     // Generate slug from company name
-    const slug = company.companyName
+    const baseSlug = company.companyName
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-|-$/g, '')
+
+    // Check if slug already exists (excluding current tenant if updating)
+    const slugQuery = serviceClient
+      .from('tenants')
+      .select('id, slug')
+      .eq('slug', baseSlug)
+
+    // If updating existing tenant, exclude it from the check
+    if (existingTenant) {
+      slugQuery.neq('id', existingTenant.id)
+    }
+
+    const { data: existingSlug } = await slugQuery.maybeSingle()
+
+    // If slug exists for another tenant, append random suffix
+    const slug = existingSlug
+      ? `${baseSlug}-${Math.random().toString(36).substring(2, 8)}`
+      : baseSlug
 
     // Build integrations config
     const integrations: Record<string, unknown> = {}
