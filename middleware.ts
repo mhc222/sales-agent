@@ -2,6 +2,7 @@ import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
 const PUBLIC_ROUTES = ['/login', '/signup', '/forgot-password', '/auth/callback']
+const ACCOUNT_ROUTE = '/account'
 const ONBOARDING_ROUTE = '/onboarding'
 
 export async function middleware(request: NextRequest) {
@@ -69,22 +70,27 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(loginUrl)
   }
 
-  // Check onboarding status (skip for onboarding route itself)
-  if (!pathname.startsWith(ONBOARDING_ROUTE)) {
-    // Get user's tenant and check onboarding
-    const { data: userTenant } = await supabase
-      .from('user_tenants')
-      .select('tenant:tenants(settings)')
-      .eq('user_id', user.id)
-      .single()
+  // Allow account and onboarding routes without checking onboarding status
+  if (pathname.startsWith(ACCOUNT_ROUTE) || pathname.startsWith(ONBOARDING_ROUTE)) {
+    return response
+  }
 
-    const settings = (userTenant?.tenant as any)?.settings as Record<string, unknown> | undefined
-    const onboardingComplete = settings?.onboarding_completed === true
+  // Check if user has at least one completed brand
+  const { data: userTenants } = await supabase
+    .from('user_tenants')
+    .select('tenant:tenants(settings)')
+    .eq('user_id', user.id)
 
-    // If user has no tenant or onboarding not complete, redirect to onboarding
-    if (!userTenant || !onboardingComplete) {
-      return NextResponse.redirect(new URL('/onboarding', request.url))
-    }
+  // Check if any tenant has completed onboarding
+  const hasCompletedBrand = (userTenants || []).some((ut) => {
+    const tenant = Array.isArray(ut.tenant) ? ut.tenant[0] : ut.tenant
+    const settings = tenant?.settings as Record<string, unknown> | undefined
+    return settings?.onboarding_completed === true
+  })
+
+  // If no completed brands, redirect to account page to manage brands
+  if (!hasCompletedBrand) {
+    return NextResponse.redirect(new URL('/account', request.url))
   }
 
   return response
