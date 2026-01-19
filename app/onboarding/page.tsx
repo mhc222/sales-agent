@@ -190,10 +190,16 @@ export default function OnboardingPage() {
     setError(null)
 
     try {
+      // Get active tenant ID if set (for multi-brand flow)
+      const activeTenantId = localStorage.getItem('active_tenant_id')
+
       const res = await fetch('/api/onboarding/complete', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
+        body: JSON.stringify({
+          ...data,
+          tenantId: activeTenantId || undefined,
+        }),
       })
 
       const result = await res.json()
@@ -206,8 +212,8 @@ export default function OnboardingPage() {
       // Clear saved progress on successful completion
       clearProgress()
 
-      // Redirect to dashboard
-      router.push('/dashboard')
+      // Redirect to account page to see all brands
+      router.push('/account')
       router.refresh()
     } catch (err) {
       setError('An unexpected error occurred')

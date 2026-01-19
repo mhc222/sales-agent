@@ -130,14 +130,14 @@ export async function POST(request: Request) {
       .replace(/^-|-$/g, '')
 
     // Check if slug already exists (excluding current tenant if updating)
-    const slugQuery = serviceClient
+    let slugQuery = serviceClient
       .from('tenants')
       .select('id, slug')
       .eq('slug', baseSlug)
 
     // If updating existing tenant, exclude it from the check
     if (existingTenant) {
-      slugQuery.neq('id', existingTenant.id)
+      slugQuery = slugQuery.neq('id', existingTenant.id)
     }
 
     const { data: existingSlug } = await slugQuery.maybeSingle()
