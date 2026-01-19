@@ -30,7 +30,7 @@ export default function LoginForm() {
         return
       }
 
-      router.push('/dashboard')
+      router.push('/account')
       router.refresh()
     } catch (err) {
       setError('An unexpected error occurred')

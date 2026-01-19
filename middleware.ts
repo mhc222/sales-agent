@@ -56,9 +56,9 @@ export async function middleware(request: NextRequest) {
 
   // Allow public routes
   if (PUBLIC_ROUTES.some(route => pathname.startsWith(route))) {
-    // If user is logged in and tries to access auth pages, redirect to dashboard
+    // If user is logged in and tries to access auth pages, redirect to account
     if (user) {
-      return NextResponse.redirect(new URL('/dashboard', request.url))
+      return NextResponse.redirect(new URL('/account', request.url))
     }
     return response
   }

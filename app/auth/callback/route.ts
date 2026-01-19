@@ -15,28 +15,11 @@ export async function GET(request: NextRequest) {
       // Check if this is a password recovery
       if (type === 'recovery') {
         // Redirect to password update page (could add later)
-        return NextResponse.redirect(new URL('/dashboard', request.url))
+        return NextResponse.redirect(new URL('/account', request.url))
       }
 
-      // Check if user has completed onboarding
-      const { data: { user } } = await supabase.auth.getUser()
-
-      if (user) {
-        const { data: userTenant } = await supabase
-          .from('user_tenants')
-          .select('tenant:tenants(settings)')
-          .eq('user_id', user.id)
-          .single()
-
-        const settings = (userTenant?.tenant as any)?.settings as Record<string, unknown> | undefined
-        const onboardingComplete = settings?.onboarding_completed === true
-
-        if (!userTenant || !onboardingComplete) {
-          return NextResponse.redirect(new URL('/onboarding', request.url))
-        }
-      }
-
-      return NextResponse.redirect(new URL('/dashboard', request.url))
+      // Always redirect to account page - it will show brands and let user choose
+      return NextResponse.redirect(new URL('/account', request.url))
     }
   }
 
