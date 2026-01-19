@@ -28,11 +28,14 @@ export async function GET() {
         )
       `)
       .eq('user_id', user.id)
-      .order('created_at', { ascending: true })
 
     if (error) {
       console.error('Failed to fetch brands:', error)
-      return NextResponse.json({ error: 'Failed to fetch brands' }, { status: 500 })
+      return NextResponse.json({
+        error: 'Failed to fetch brands',
+        details: error.message,
+        code: error.code
+      }, { status: 500 })
     }
 
     // Flatten and transform the response
@@ -54,6 +57,9 @@ export async function GET() {
     return NextResponse.json({ brands })
   } catch (error) {
     console.error('Get brands error:', error)
-    return NextResponse.json({ error: 'Failed to fetch brands' }, { status: 500 })
+    return NextResponse.json({
+      error: 'Failed to fetch brands',
+      details: error instanceof Error ? error.message : 'Unknown error'
+    }, { status: 500 })
   }
 }
