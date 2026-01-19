@@ -126,6 +126,25 @@ async function handleConnectionAccepted(
       })
       .eq('id', lead.id)
 
+    // Update orchestration state directly (for immediate sync)
+    await supabase
+      .from('orchestration_state')
+      .update({
+        linkedin_connected: true,
+        linkedin_connected_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq('lead_id', lead.id)
+
+    // Log orchestration event
+    await supabase.from('orchestration_events').insert({
+      lead_id: lead.id,
+      tenant_id: tenantId,
+      event_type: 'linkedin_connected',
+      channel: 'linkedin',
+      event_data: { campaign_id: payload.campaign_id },
+    })
+
     // Log engagement
     await supabase.from('engagement_log').insert({
       lead_id: lead.id,
@@ -201,6 +220,29 @@ async function handleMessageReceived(
         updated_at: new Date().toISOString(),
       })
       .eq('id', lead.id)
+
+    // Update orchestration state directly (for immediate sync)
+    await supabase
+      .from('orchestration_state')
+      .update({
+        linkedin_replied: true,
+        linkedin_replied_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq('lead_id', lead.id)
+
+    // Log orchestration event
+    await supabase.from('orchestration_events').insert({
+      lead_id: lead.id,
+      tenant_id: tenantId,
+      event_type: 'linkedin_replied',
+      channel: 'linkedin',
+      event_data: {
+        campaign_id: payload.campaign_id,
+        conversation_id: payload.conversation_id,
+        message_preview: messageText.slice(0, 100),
+      },
+    })
 
     // Log engagement
     await supabase.from('engagement_log').insert({
