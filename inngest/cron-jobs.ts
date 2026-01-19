@@ -846,17 +846,18 @@ export const cronNureplySync = inngest.createFunction(
 )
 
 // ============================================================================
-// CRON 7: HeyReach Engagement Sync (Every 15 minutes)
-// Polls HeyReach for LinkedIn conversations and replies
+// CRON 7: HeyReach Engagement Sync (Backup - Daily)
+// Backup sync for any missed webhooks - HeyReach now sends webhooks for real-time updates
+// Primary webhook handler: /api/webhooks/heyreach
 // ============================================================================
 
 export const cronHeyReachSync = inngest.createFunction(
   {
     id: 'cron-heyreach-sync',
-    name: 'HeyReach Engagement Sync (All Tenants)',
+    name: 'HeyReach Backup Sync (All Tenants)',
     retries: 2,
   },
-  { cron: '*/15 * * * *' }, // Every 15 minutes
+  { cron: '0 7 * * *' }, // Daily at 7am UTC (backup only, webhooks handle real-time)
   async ({ step }) => {
     console.log('[Cron HeyReach] Starting engagement sync...')
 
