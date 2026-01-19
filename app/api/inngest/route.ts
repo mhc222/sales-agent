@@ -14,6 +14,13 @@ import {
 } from '../../../inngest/workflow5-email-responses'
 import { learningAnalysis, manualLearningAnalysis } from '../../../inngest/workflow6-learning'
 import {
+  generateAndDeploySequence,
+  executeNextStep,
+  handleSmartleadEvent,
+  handleHeyReachEvent,
+  checkWaitingTimeouts,
+} from '../../../inngest/orchestration-workflows'
+import {
   cronDailyAudienceLab,
   cronDailyStats,
   cronLearningAnalysis,
@@ -44,6 +51,12 @@ export const { GET, POST, PUT } = serve({
     ghlUnsubscribeSync,          // Workflow 5: GHL unsubscribe sync
     learningAnalysis,            // Workflow 6: Daily Learning Analysis
     manualLearningAnalysis,      // Workflow 6: Manual Learning Analysis (event)
+    // Multi-channel orchestration workflows
+    generateAndDeploySequence,   // Orchestration: Generate multi-channel sequence
+    executeNextStep,             // Orchestration: Execute sequence steps
+    handleSmartleadEvent,        // Orchestration: Process Smartlead webhooks
+    handleHeyReachEvent,         // Orchestration: Process HeyReach webhooks
+    checkWaitingTimeouts,        // Orchestration: Cron for waiting timeouts
     // Scheduled cron jobs
     cronDailyAudienceLab,        // Cron: Daily AudienceLab ingestion - all sources per tenant (9am UTC)
     cronDailyStats,              // Cron: Daily stats & Slack summary (8am UTC)

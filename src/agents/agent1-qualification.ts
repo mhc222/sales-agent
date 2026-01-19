@@ -2,12 +2,20 @@ import Anthropic from '@anthropic-ai/sdk'
 import { supabase, type Lead, type GHLRecord } from '../lib/supabase'
 import { loadPrompt } from '../lib/prompt-loader'
 import type { NormalizedLead, IntentSignals } from '../lib/data-normalizer'
+import { getICPForLead, formatICPForPrompt } from '../lib/tenant-settings'
+import type { Brand, Campaign } from '../lib/brands'
 
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 })
 
 type QualificationDecision = 'YES' | 'NO' | 'REVIEW'
+
+// Brand context for qualification decisions
+export interface BrandContext {
+  brand?: Brand
+  campaign?: Campaign
+}
 
 export interface QualificationResult {
   decision: QualificationDecision
@@ -37,10 +45,14 @@ interface LegacyIntentSignal {
 
 /**
  * Qualify a lead using normalized data
+ * @param normalized - Normalized lead data
+ * @param existingRecords - Existing system records for deduplication
+ * @param brandContext - Optional brand and campaign context for ICP-aware qualification
  */
 export async function qualifyNormalizedLead(
   normalized: NormalizedLead,
-  existingRecords?: ExistingRecords
+  existingRecords?: ExistingRecords,
+  brandContext?: BrandContext
 ): Promise<QualificationResult> {
   const records: ExistingRecords = existingRecords || { ghl: null, smartlead: [], heyreach: [] }
 
@@ -53,17 +65,59 @@ export async function qualifyNormalizedLead(
       }
     : {}
 
-  // Fetch RAG documents (Shared RAG for qualification)
-  const { data: ragDocs, error: ragError } = await supabase
-    .from('rag_documents')
-    .select('content')
-    .eq('tenant_id', normalized.tenantId)
-    .eq('rag_type', 'shared')
-    .limit(5)
+  // Fetch brand-specific or tenant-level ICP
+  const icp = await getICPForLead(normalized.tenantId, brandContext?.brand?.id)
+  const icpContext = icp ? formatICPForPrompt(icp) : ''
 
-  if (ragError) {
-    console.error('Error fetching RAG documents:', ragError)
-    throw ragError
+  // Build brand context string for prompt
+  const brandContextParts: string[] = []
+  if (brandContext?.brand) {
+    brandContextParts.push(`Brand: ${brandContext.brand.name}`)
+    if (brandContext.brand.value_proposition) {
+      brandContextParts.push(`Value Proposition: ${brandContext.brand.value_proposition}`)
+    }
+    if (brandContext.brand.target_industries?.length) {
+      brandContextParts.push(`Target Industries: ${brandContext.brand.target_industries.join(', ')}`)
+    }
+  }
+  if (brandContext?.campaign) {
+    brandContextParts.push(`Campaign: ${brandContext.campaign.name}`)
+    if (brandContext.campaign.target_persona) {
+      brandContextParts.push(`Target Persona: ${brandContext.campaign.target_persona}`)
+    }
+  }
+  const brandContextString = brandContextParts.length > 0
+    ? `\n\nBRAND CONTEXT:\n${brandContextParts.join('\n')}`
+    : ''
+
+  // Fetch RAG documents (Shared RAG for qualification)
+  // Prefer brand-specific RAG if brand is provided
+  let ragDocs
+  if (brandContext?.brand?.id) {
+    const { data } = await supabase
+      .from('rag_documents')
+      .select('content')
+      .eq('brand_id', brandContext.brand.id)
+      .in('rag_type', ['shared', 'qualification'])
+      .limit(5)
+    ragDocs = data
+  }
+
+  // Fall back to tenant-level RAG if no brand RAG found
+  if (!ragDocs || ragDocs.length === 0) {
+    const { data, error: ragError } = await supabase
+      .from('rag_documents')
+      .select('content')
+      .eq('tenant_id', normalized.tenantId)
+      .eq('rag_type', 'shared')
+      .is('brand_id', null)
+      .limit(5)
+
+    if (ragError) {
+      console.error('Error fetching RAG documents:', ragError)
+      throw ragError
+    }
+    ragDocs = data
   }
 
   const ragContent = ragDocs?.map((doc) => doc.content).join('\n\n') || ''
@@ -101,8 +155,15 @@ export async function qualifyNormalizedLead(
   )
 
   // Build the qualification prompt using template
-  const prompt = loadPrompt('agent1-qualification', {
+  // Include ICP context and brand context if available
+  const ragWithIcpAndBrand = [
     ragContent,
+    icpContext ? `\n\nIDEAL CUSTOMER PROFILE (ICP):\n${icpContext}` : '',
+    brandContextString,
+  ].filter(Boolean).join('\n')
+
+  const prompt = loadPrompt('agent1-qualification', {
+    ragContent: ragWithIcpAndBrand,
     firstName: normalized.firstName,
     lastName: normalized.lastName,
     email: normalized.email,

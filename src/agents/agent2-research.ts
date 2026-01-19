@@ -13,10 +13,18 @@ import { researchCompany } from '../lib/perplexity'
 import { analyzeLinkedInPostsEnhanced, type EnhancedLinkedInAnalysis } from '../lib/linkedin-analyzer'
 import { scoreIntent, type EnhancedIntentScore, type IntentData } from '../lib/intent-scorer'
 import { loadPrompt } from '../lib/prompt-loader'
+import { getICPForLead, formatICPForPrompt } from '../lib/tenant-settings'
+import type { Brand, Campaign } from '../lib/brands'
 
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 })
+
+// Brand context for research
+export interface BrandContext {
+  brand?: Brand
+  campaign?: Campaign
+}
 
 // Types
 export type TriggerType =
@@ -134,22 +142,50 @@ async function fetchFundamentals(ragTypes: string[]): Promise<string> {
 
 /**
  * Main research function - synthesizes all data sources
+ * @param lead - Lead data
+ * @param rawData - Raw research data from external sources
+ * @param brandContext - Optional brand and campaign context for brand-specific research
  */
 export async function researchLead(
   lead: Lead,
-  rawData: RawResearchData
+  rawData: RawResearchData,
+  brandContext?: BrandContext
 ): Promise<ResearchResult> {
   console.log(`[Agent 2] Starting research synthesis for: ${lead.email}`)
 
-  // Fetch RAG documents for persona matching and context
-  const { data: ragDocs, error: ragError } = await supabase
-    .from('rag_documents')
-    .select('content, rag_type, metadata')
-    .eq('tenant_id', lead.tenant_id)
-    .in('rag_type', ['persona', 'icp', 'shared'])
+  // Fetch brand-specific or tenant-level ICP
+  const icp = await getICPForLead(lead.tenant_id, brandContext?.brand?.id)
+  const icpFromSettings = icp ? formatICPForPrompt(icp) : ''
 
-  if (ragError) {
-    console.error('[Agent 2] Error fetching RAG documents:', ragError)
+  // Fetch RAG documents - prefer brand-specific if available
+  let ragDocs
+  if (brandContext?.brand?.id) {
+    // Try brand-specific RAG first
+    const { data } = await supabase
+      .from('rag_documents')
+      .select('content, rag_type, metadata')
+      .eq('brand_id', brandContext.brand.id)
+      .in('rag_type', ['persona', 'icp', 'shared', 'research'])
+
+    if (data && data.length > 0) {
+      ragDocs = data
+      console.log(`[Agent 2] Using brand-specific RAG for brand ${brandContext.brand.id}`)
+    }
+  }
+
+  // Fall back to tenant-level RAG if no brand RAG found
+  if (!ragDocs || ragDocs.length === 0) {
+    const { data, error: ragError } = await supabase
+      .from('rag_documents')
+      .select('content, rag_type, metadata')
+      .eq('tenant_id', lead.tenant_id)
+      .is('brand_id', null)
+      .in('rag_type', ['persona', 'icp', 'shared'])
+
+    if (ragError) {
+      console.error('[Agent 2] Error fetching RAG documents:', ragError)
+    }
+    ragDocs = data
   }
 
   // Fetch fundamentals for intent signal guidance
@@ -162,11 +198,13 @@ export async function researchLead(
       .map((d) => d.content)
       .join('\n\n') || ''
 
-  const icpDocs =
+  // Combine RAG ICP docs with ICP from settings (brand or tenant)
+  const ragIcpDocs =
     ragDocs
       ?.filter((d) => d.rag_type === 'icp')
       .map((d) => d.content)
       .join('\n\n') || ''
+  const icpDocs = [ragIcpDocs, icpFromSettings].filter(Boolean).join('\n\n')
 
   const sharedDocs =
     ragDocs
@@ -174,8 +212,30 @@ export async function researchLead(
       .map((d) => d.content)
       .join('\n\n') || ''
 
+  // Build brand context string for prompt
+  let brandContextString = ''
+  if (brandContext?.brand) {
+    const parts = [`Brand: ${brandContext.brand.name}`]
+    if (brandContext.brand.value_proposition) {
+      parts.push(`Value Proposition: ${brandContext.brand.value_proposition}`)
+    }
+    if (brandContext.brand.voice_tone) {
+      parts.push(`Brand Voice: ${brandContext.brand.voice_tone}`)
+    }
+    if (brandContext.campaign) {
+      parts.push(`Campaign: ${brandContext.campaign.name}`)
+      if (brandContext.campaign.target_persona) {
+        parts.push(`Target Persona: ${brandContext.campaign.target_persona}`)
+      }
+    }
+    brandContextString = `\n\nBRAND CONTEXT:\n${parts.join('\n')}`
+  }
+
+  // Append brand context to shared docs
+  const sharedDocsWithBrand = sharedDocs + brandContextString
+
   // Build the research synthesis prompt (with fundamentals for intent signal guidance)
-  const prompt = buildResearchPrompt(lead, rawData, personaDocs, icpDocs, sharedDocs, intentSignalFundamentals)
+  const prompt = buildResearchPrompt(lead, rawData, personaDocs, icpDocs, sharedDocsWithBrand, intentSignalFundamentals)
 
   // Call Claude for synthesis
   const message = await anthropic.messages.create({
@@ -460,17 +520,21 @@ interface EnhancedRawResearchData extends RawResearchData {
 /**
  * Enhanced research function using new multi-query modules
  * Runs parallel analysis for better signal extraction
+ * @param lead - Lead data
+ * @param rawData - Raw research data from external sources
+ * @param brandContext - Optional brand and campaign context for brand-specific research
  */
 export async function conductEnhancedResearch(
   lead: Lead,
-  rawData: EnhancedRawResearchData
+  rawData: EnhancedRawResearchData,
+  brandContext?: BrandContext
 ): Promise<EnhancedResearchResult> {
   console.log(`[Agent 2] Starting ENHANCED research for: ${lead.email}`)
 
   // Run enhanced analysis in parallel with base research
   const [baseResult, perplexityEnhanced, linkedinEnhanced, intentScore] = await Promise.all([
-    // Base research (existing flow)
-    researchLead(lead, rawData),
+    // Base research (existing flow) - pass brand context
+    researchLead(lead, rawData, brandContext),
 
     // Enhanced Perplexity research (4 parallel queries)
     researchCompany(

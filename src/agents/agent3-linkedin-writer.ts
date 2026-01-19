@@ -8,10 +8,18 @@ import { supabase, type Lead } from '../lib/supabase'
 import type { ResearchResult } from './agent2-research'
 import { loadPrompt } from '../lib/prompt-loader'
 import type { ContextProfile } from './context-profile-builder'
+import { getICPForLead, formatICPForPrompt } from '../lib/tenant-settings'
+import type { Brand, Campaign } from '../lib/brands'
 
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 })
+
+// Brand context for LinkedIn sequence generation
+export interface BrandContext {
+  brand?: Brand
+  campaign?: Campaign
+}
 
 // ============================================================================
 // TYPES
@@ -46,6 +54,7 @@ interface LinkedInWriterInput {
   lead: Lead
   contextProfile: ContextProfile
   research: ResearchResult
+  brandContext?: BrandContext
 }
 
 interface NewFormatResponse {
@@ -71,30 +80,85 @@ interface NewFormatResponse {
 
 /**
  * Generate LinkedIn DM sequence using context profile for personalization
+ * @param input - Lead data, context profile, research, and optional brand context
  */
 export async function writeLinkedInSequence(input: LinkedInWriterInput): Promise<LinkedInSequence> {
-  const { lead, contextProfile, research } = input
+  const { lead, contextProfile, research, brandContext } = input
 
   console.log(`[Agent 3-LinkedIn] Writing DM sequence for: ${lead.email}`)
   console.log(`[Agent 3-LinkedIn] LinkedIn URL: ${lead.linkedin_url || 'Not provided'}`)
   console.log(`[Agent 3-LinkedIn] Profile quality score: ${contextProfile.metadata.dataQualityScore}`)
+  if (brandContext?.brand) {
+    console.log(`[Agent 3-LinkedIn] Brand context: ${brandContext.brand.name}`)
+  }
 
-  // Fetch RAG documents - messaging guidelines
-  const { data: ragDocs, error: ragError } = await supabase
-    .from('rag_documents')
-    .select('content, rag_type, metadata')
-    .eq('tenant_id', lead.tenant_id)
-    .in('rag_type', ['messaging', 'shared'])
+  // Load brand-specific or tenant-level ICP
+  const icp = await getICPForLead(lead.tenant_id, brandContext?.brand?.id)
+  const icpContext = icp ? formatICPForPrompt(icp) : ''
 
-  if (ragError) {
-    console.error('[Agent 3-LinkedIn] Error fetching RAG documents:', ragError)
+  // Build brand context string for prompt
+  let brandContextString = ''
+  if (brandContext?.brand) {
+    const parts = [`Brand: ${brandContext.brand.name}`]
+    if (brandContext.brand.voice_tone) {
+      parts.push(`Brand Voice/Tone: ${brandContext.brand.voice_tone}`)
+    }
+    if (brandContext.brand.value_proposition) {
+      parts.push(`Value Proposition: ${brandContext.brand.value_proposition}`)
+    }
+    if (brandContext.campaign) {
+      parts.push(`Campaign: ${brandContext.campaign.name}`)
+    }
+    brandContextString = parts.join('\n')
+  }
+
+  // Fetch RAG documents - prefer brand-specific if available
+  let ragDocs
+  if (brandContext?.brand?.id) {
+    const { data } = await supabase
+      .from('rag_documents')
+      .select('content, rag_type, metadata')
+      .eq('brand_id', brandContext.brand.id)
+      .in('rag_type', ['messaging', 'shared', 'linkedin'])
+
+    if (data && data.length > 0) {
+      ragDocs = data
+      console.log(`[Agent 3-LinkedIn] Using brand-specific RAG for brand ${brandContext.brand.id}`)
+    }
+  }
+
+  // Fall back to tenant-level RAG if no brand RAG found
+  if (!ragDocs || ragDocs.length === 0) {
+    const { data, error: ragError } = await supabase
+      .from('rag_documents')
+      .select('content, rag_type, metadata')
+      .eq('tenant_id', lead.tenant_id)
+      .is('brand_id', null)
+      .in('rag_type', ['messaging', 'shared'])
+
+    if (ragError) {
+      console.error('[Agent 3-LinkedIn] Error fetching RAG documents:', ragError)
+    }
+    ragDocs = data
   }
 
   // Extract messaging guidelines from RAG
-  const messagingRag = ragDocs
+  let messagingRag = ragDocs
     ?.filter((d) => d.rag_type === 'messaging')
     .map((d) => d.content)
     .join('\n\n') || ''
+
+  // Add brand context and ICP to messaging guidance if available
+  if (brandContextString || icpContext) {
+    const additionalContext: string[] = []
+    if (brandContextString) {
+      additionalContext.push(`\n\nBRAND CONTEXT:\n${brandContextString}`)
+    }
+    if (icpContext) {
+      additionalContext.push(`\n\nIDEAL CUSTOMER PROFILE (ICP):\n${icpContext}`)
+    }
+    messagingRag = messagingRag + additionalContext.join('')
+  }
 
   // Extract anti-patterns
   const antiPatterns = ragDocs

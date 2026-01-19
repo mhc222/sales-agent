@@ -288,3 +288,103 @@ export function maskApiKey(apiKey?: string): string | null {
   if (apiKey.length <= 6) return '******'
   return '●'.repeat(12) + apiKey.slice(-6)
 }
+
+/**
+ * Get ICP for a lead - tries brand-specific ICP first, falls back to tenant ICP
+ * This is the primary function agents should use to get ICP context
+ */
+export async function getICPForLead(tenantId: string, brandId?: string): Promise<TenantICP | null> {
+  const supabase = getServiceClient()
+
+  // 1. Try brand-specific ICP first
+  if (brandId) {
+    const { data: brand, error: brandError } = await supabase
+      .from('brands')
+      .select('icp')
+      .eq('id', brandId)
+      .single()
+
+    if (!brandError && brand?.icp) {
+      console.log(`[TenantSettings] Using brand-specific ICP for brand ${brandId}`)
+      return brand.icp as TenantICP
+    }
+  }
+
+  // 2. Fall back to tenant ICP
+  const { data: tenant, error: tenantError } = await supabase
+    .from('tenants')
+    .select('settings')
+    .eq('id', tenantId)
+    .single()
+
+  if (tenantError || !tenant) {
+    console.error(`[TenantSettings] Failed to fetch tenant ICP for ${tenantId}:`, tenantError)
+    return null
+  }
+
+  const settings = tenant.settings as TenantSettings | null
+  if (settings?.icp) {
+    console.log(`[TenantSettings] Using tenant-level ICP for tenant ${tenantId}`)
+    return settings.icp
+  }
+
+  console.log(`[TenantSettings] No ICP found for tenant ${tenantId}`)
+  return null
+}
+
+/**
+ * Format ICP for use in prompts
+ * Creates a structured text representation of the ICP
+ */
+export function formatICPForPrompt(icp: TenantICP): string {
+  const sections: string[] = []
+
+  // Account Criteria
+  if (icp.account_criteria) {
+    const ac = icp.account_criteria
+    const criteria: string[] = []
+
+    if (ac.industries?.length) {
+      const highPriority = ac.industries.filter(i => i.priority === 'high').map(i => i.value)
+      criteria.push(`Industries (high priority): ${highPriority.join(', ') || 'Any'}`)
+    }
+    if (ac.company_sizes?.length) {
+      const sizes = ac.company_sizes.filter(s => s.priority === 'high').map(s => s.value)
+      criteria.push(`Company sizes: ${sizes.join(', ') || 'Any'}`)
+    }
+    if (ac.revenue_ranges?.length) {
+      const revenues = ac.revenue_ranges.filter(r => r.priority === 'high').map(r => r.value)
+      criteria.push(`Revenue ranges: ${revenues.join(', ') || 'Any'}`)
+    }
+    if (ac.prospecting_signals?.length) {
+      const signals = ac.prospecting_signals.map(s => s.value)
+      criteria.push(`Prospecting signals: ${signals.join(', ')}`)
+    }
+
+    if (criteria.length > 0) {
+      sections.push(`ACCOUNT CRITERIA:\n${criteria.join('\n')}`)
+    }
+  }
+
+  // Personas
+  if (icp.personas?.length) {
+    const personaDescriptions = icp.personas.map((p, i) => {
+      return `Persona ${i + 1}: ${p.job_title}
+  - Job to be done: ${p.job_to_be_done}
+  - Currently they: ${p.currently_they}
+  - Which results in: ${p.which_results_in}
+  - How we solve: ${p.how_we_solve}`
+    })
+    sections.push(`TARGET PERSONAS:\n${personaDescriptions.join('\n\n')}`)
+  }
+
+  // Triggers
+  if (icp.triggers?.length) {
+    const triggerDescriptions = icp.triggers.map(t => {
+      return `- ${t.name}: Look for ${t.what_to_look_for.join(', ')} (${t.source})`
+    })
+    sections.push(`BUYING TRIGGERS:\n${triggerDescriptions.join('\n')}`)
+  }
+
+  return sections.join('\n\n') || 'No ICP criteria defined'
+}

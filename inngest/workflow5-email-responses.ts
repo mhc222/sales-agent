@@ -1,5 +1,5 @@
 /**
- * Workflow 5: Email Response Handler
+ * Workflow 5: Email & LinkedIn Response Handler
  *
  * Handles Smartlead email responses:
  * 1. Bounce → Flag email, prevent future sends
@@ -8,12 +8,19 @@
  * 4. Remove Me → Unsubscribe + sync to GHL
  * 5. Interested → Notify human via Slack
  * 6. High Engagement → Notify when open threshold reached
+ *
+ * Handles HeyReach LinkedIn responses:
+ * 1. Classify reply (interested, not_interested, etc.)
+ * 2. If positive → Pause ALL sequences + notify Jordan
+ * 3. If negative → Stop sequences
  */
 
 import { inngest } from './client'
 import { supabase } from '../src/lib/supabase'
 import { classifyReply, type ClassificationResult } from '../src/lib/reply-classifier'
 import { forwardPositiveReply, isOutlookForwardingConfigured } from '../src/lib/outlook-forwarder'
+import * as orchestrator from '../src/lib/orchestration/orchestrator'
+import * as smartlead from '../src/lib/smartlead'
 
 // ============================================================================
 // REPLY CLASSIFICATION WORKFLOW
@@ -782,5 +789,473 @@ export const ghlUnsubscribeSync = inngest.createFunction(
 
     console.log(`[GHL Sync] No GHL contact found for ${email}`)
     return { status: 'no_contact', email }
+  }
+)
+
+// ============================================================================
+// LINKEDIN REPLY CLASSIFICATION WORKFLOW
+// ============================================================================
+export const linkedinReplyClassification = inngest.createFunction(
+  {
+    id: 'linkedin-reply-classification-v1',
+    name: 'LinkedIn Reply Classification',
+    retries: 2,
+  },
+  { event: 'linkedin.reply-received' },
+  async ({ event, step }) => {
+    const {
+      response_id,
+      lead_id,
+      tenant_id,
+      linkedin_url,
+      message,
+      conversation_id,
+      lead_name,
+      company_name,
+    } = event.data as {
+      response_id?: string
+      lead_id: string
+      tenant_id: string
+      linkedin_url: string
+      message: string
+      conversation_id?: string
+      lead_name?: string
+      company_name?: string
+    }
+
+    console.log(`[LinkedIn Reply Handler] Classifying reply from: ${linkedin_url}`)
+
+    // Step 1: Classify the reply using Claude (same classifier as email)
+    const classification = await step.run('classify-reply', async () => {
+      return await classifyReply({
+        reply_text: message,
+        reply_subject: 'LinkedIn Message', // LinkedIn doesn't have subjects
+        lead_name,
+        company_name,
+      })
+    })
+
+    console.log(`[LinkedIn Reply Handler] Classification: ${classification.category} (${classification.confidence})`)
+
+    // Step 2: Update the linkedin_responses record with classification
+    if (response_id) {
+      await step.run('update-response-record', async () => {
+        await supabase
+          .from('linkedin_responses')
+          .update({
+            reply_category: classification.category,
+            classification_confidence: classification.confidence,
+            classification_reasoning: classification.reasoning,
+            processed: true,
+            processed_at: new Date().toISOString(),
+          })
+          .eq('id', response_id)
+      })
+    }
+
+    // Step 3: Update lead sentiment
+    await step.run('update-lead-sentiment', async () => {
+      await supabase
+        .from('leads')
+        .update({
+          linkedin_reply_sentiment: classification.category,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', lead_id)
+    })
+
+    // Step 4: Route based on category
+    switch (classification.category) {
+      case 'interested':
+        await handleLinkedInInterested(step, {
+          lead_id,
+          tenant_id,
+          response_id,
+          linkedin_url,
+          message,
+          classification,
+          lead_name,
+          company_name,
+          conversation_id,
+        })
+        break
+
+      case 'not_interested_now':
+      case 'remove_me':
+        await handleLinkedInNegative(step, {
+          lead_id,
+          tenant_id,
+          linkedin_url,
+          message,
+          classification,
+        })
+        break
+
+      case 'out_of_office':
+        // Just log it - LinkedIn OOO is less common
+        await step.run('log-linkedin-ooo', async () => {
+          await supabase.from('engagement_log').insert({
+            lead_id,
+            tenant_id,
+            event_type: 'linkedin.out_of_office',
+            metadata: {
+              linkedin_url,
+              return_date: classification.ooo_return_date,
+            },
+          })
+        })
+        break
+
+      default:
+        // Log for review
+        await step.run('log-linkedin-other', async () => {
+          await supabase.from('engagement_log').insert({
+            lead_id,
+            tenant_id,
+            event_type: 'linkedin.reply_needs_review',
+            metadata: {
+              linkedin_url,
+              message: message.substring(0, 500),
+              classification,
+            },
+          })
+        })
+    }
+
+    return {
+      status: 'processed',
+      response_id,
+      category: classification.category,
+      confidence: classification.confidence,
+    }
+  }
+)
+
+// ============================================================================
+// LINKEDIN INTERESTED HANDLER
+// ============================================================================
+async function handleLinkedInInterested(
+  step: {
+    run: (id: string, fn: () => Promise<unknown>) => Promise<unknown>
+    sendEvent: (id: string, event: { name: string; data: Record<string, unknown> }) => Promise<unknown>
+  },
+  data: {
+    lead_id: string
+    tenant_id: string
+    response_id?: string
+    linkedin_url: string
+    message: string
+    classification: ClassificationResult
+    lead_name?: string
+    company_name?: string
+    conversation_id?: string
+  }
+) {
+  const { lead_id, tenant_id, response_id, linkedin_url, message, classification, lead_name, company_name } = data
+
+  console.log(`[LinkedIn Reply Handler] Positive reply! Pausing all sequences and notifying Jordan`)
+
+  // Step 1: Pause ALL sequences via orchestrator
+  await step.run('pause-all-sequences', async () => {
+    // Get orchestration state
+    const state = await orchestrator.getOrchestrationState(lead_id)
+
+    if (state) {
+      // Pause orchestration (this pauses both email and LinkedIn)
+      await orchestrator.pauseOrchestration(lead_id, 'Positive LinkedIn reply - human takeover')
+
+      // Also pause in SmartLead directly if we have the campaign ID
+      const smartleadCampaignId = process.env.SMARTLEAD_MULTICHANNEL_CAMPAIGN_ID
+      if (smartleadCampaignId && state.smartlead_lead_id) {
+        try {
+          const { data: lead } = await supabase
+            .from('leads')
+            .select('email')
+            .eq('id', lead_id)
+            .single()
+
+          if (lead?.email) {
+            await smartlead.pauseLead(parseInt(smartleadCampaignId), lead.email)
+            console.log(`[LinkedIn Reply Handler] Paused SmartLead sequence for ${lead.email}`)
+          }
+        } catch (err) {
+          console.error('[LinkedIn Reply Handler] Failed to pause SmartLead:', err)
+        }
+      }
+    }
+
+    // Update lead status
+    await supabase
+      .from('leads')
+      .update({
+        status: 'interested',
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', lead_id)
+  })
+
+  // Step 2: Add to interested leads table
+  await step.run('add-to-interested', async () => {
+    await supabase.from('interested_leads').insert({
+      lead_id,
+      tenant_id,
+      reply_text: message,
+      reply_source: 'linkedin',
+      interest_level: classification.interest_level || 'warm',
+      interest_signals: classification.interest_signals || [],
+    })
+  })
+
+  // Step 3: Log engagement
+  await step.run('log-linkedin-interested', async () => {
+    await supabase.from('engagement_log').insert({
+      lead_id,
+      tenant_id,
+      event_type: 'linkedin.interested',
+      metadata: {
+        interest_level: classification.interest_level,
+        interest_signals: classification.interest_signals,
+        linkedin_url,
+      },
+    })
+  })
+
+  // Step 4: Trigger notification (reuse the same notification workflow)
+  await step.sendEvent('notify-linkedin-interested', {
+    name: 'linkedin.interested',
+    data: {
+      lead_id,
+      tenant_id,
+      response_id,
+      reply_text: message,
+      interest_level: classification.interest_level || 'warm',
+      interest_signals: classification.interest_signals || [],
+      lead_name,
+      company_name,
+      linkedin_url,
+    },
+  })
+}
+
+// ============================================================================
+// LINKEDIN NEGATIVE HANDLER
+// ============================================================================
+async function handleLinkedInNegative(
+  step: { run: (id: string, fn: () => Promise<unknown>) => Promise<unknown> },
+  data: {
+    lead_id: string
+    tenant_id: string
+    linkedin_url: string
+    message: string
+    classification: ClassificationResult
+  }
+) {
+  const { lead_id, tenant_id, linkedin_url, message, classification } = data
+
+  console.log(`[LinkedIn Reply Handler] Negative reply - stopping sequences`)
+
+  // Stop all sequences
+  await step.run('stop-all-sequences', async () => {
+    const state = await orchestrator.getOrchestrationState(lead_id)
+
+    if (state) {
+      await orchestrator.stopOrchestration(lead_id, `Negative LinkedIn reply: ${classification.category}`, {
+        reply_text: message.substring(0, 500),
+        classification: classification.category,
+      })
+    }
+
+    // Update lead status
+    await supabase
+      .from('leads')
+      .update({
+        status: classification.category === 'remove_me' ? 'unsubscribed' : 'not_interested',
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', lead_id)
+  })
+
+  // Log engagement
+  await step.run('log-linkedin-negative', async () => {
+    await supabase.from('engagement_log').insert({
+      lead_id,
+      tenant_id,
+      event_type: `linkedin.${classification.category}`,
+      metadata: {
+        linkedin_url,
+        message: message.substring(0, 500),
+      },
+    })
+  })
+}
+
+// ============================================================================
+// LINKEDIN INTERESTED NOTIFICATION
+// ============================================================================
+export const linkedinInterestedNotification = inngest.createFunction(
+  {
+    id: 'linkedin-interested-notification-v1',
+    name: 'LinkedIn Interested Lead Notification',
+    retries: 2,
+  },
+  { event: 'linkedin.interested' },
+  async ({ event, step }) => {
+    const {
+      lead_id,
+      tenant_id,
+      response_id,
+      reply_text,
+      interest_level,
+      interest_signals,
+      lead_name,
+      company_name,
+      linkedin_url,
+    } = event.data as {
+      lead_id: string
+      tenant_id: string
+      response_id?: string
+      reply_text: string
+      interest_level: 'hot' | 'warm'
+      interest_signals: string[]
+      lead_name?: string
+      company_name?: string
+      linkedin_url?: string
+    }
+
+    console.log(`[LinkedIn Interested] Processing positive LinkedIn reply from ${lead_name}`)
+
+    // Get lead email for forwarding
+    const lead = await step.run('fetch-lead', async () => {
+      const { data } = await supabase
+        .from('leads')
+        .select('email, first_name, last_name')
+        .eq('id', lead_id)
+        .single()
+      return data
+    })
+
+    // Forward to Jordan's inbox via Outlook
+    const jordanEmail = process.env.JORDAN_EMAIL || 'jordan@jsbmedia.io'
+
+    await step.run('forward-to-jordan', async () => {
+      if (!isOutlookForwardingConfigured()) {
+        console.log('[LinkedIn Interested] Outlook forwarding not configured, skipping')
+        return { forwarded: false, reason: 'not_configured' }
+      }
+
+      const success = await forwardPositiveReply({
+        toEmail: jordanEmail,
+        fromName: lead_name || 'Unknown',
+        fromEmail: lead?.email || linkedin_url || 'linkedin@unknown.com',
+        subject: `LinkedIn Reply from ${lead_name} at ${company_name}`,
+        replyBody: reply_text,
+        companyName: company_name || 'Unknown Company',
+        leadId: lead_id,
+      })
+
+      if (success) {
+        console.log(`[LinkedIn Interested] Forwarded reply to ${jordanEmail}`)
+        return { forwarded: true }
+      } else {
+        console.error('[LinkedIn Interested] Failed to forward reply to Jordan')
+        return { forwarded: false, reason: 'send_failed' }
+      }
+    })
+
+    // Send email notification via Resend
+    await step.run('notify-email-linkedin-interested', async () => {
+      const resendApiKey = process.env.RESEND_API_KEY
+      const notifyEmails = (process.env.NOTIFY_EMAILS || 'mcronin@jsbmedia.io,jordan@jsbmedia.io,mhc222@gmail.com')
+        .split(',')
+        .map(e => e.trim())
+
+      if (!resendApiKey) {
+        console.log('[LinkedIn Interested] No Resend API key configured')
+        return { sent: false }
+      }
+
+      const emoji = interest_level === 'hot' ? '🔥' : '✨'
+      const levelText = interest_level === 'hot' ? 'HOT LEAD' : 'Warm Lead'
+
+      const htmlBody = `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2 style="color: ${interest_level === 'hot' ? '#e53e3e' : '#ed8936'};">
+            ${emoji} ${levelText} - LinkedIn Reply!
+          </h2>
+
+          <p><strong>${lead_name}</strong> at <strong>${company_name}</strong> replied on LinkedIn with interest!</p>
+
+          <div style="background: #f7fafc; border-left: 4px solid #0077b5; padding: 16px; margin: 16px 0;">
+            <p style="margin: 0; font-style: italic;">${reply_text.substring(0, 1000)}</p>
+          </div>
+
+          <table style="width: 100%; margin: 16px 0;">
+            <tr>
+              <td style="padding: 8px 0;"><strong>LinkedIn:</strong></td>
+              <td><a href="${linkedin_url}">${linkedin_url}</a></td>
+            </tr>
+            <tr>
+              <td style="padding: 8px 0;"><strong>Email:</strong></td>
+              <td>${lead?.email || 'N/A'}</td>
+            </tr>
+            <tr>
+              <td style="padding: 8px 0;"><strong>Interest Level:</strong></td>
+              <td>${interest_level}</td>
+            </tr>
+            ${interest_signals.length > 0 ? `
+            <tr>
+              <td style="padding: 8px 0; vertical-align: top;"><strong>Interest Signals:</strong></td>
+              <td>${interest_signals.map(s => `• ${s}`).join('<br>')}</td>
+            </tr>
+            ` : ''}
+          </table>
+
+          <p style="background: #fed7d7; padding: 12px; border-radius: 4px;">
+            <strong>⏸️ All sequences paused</strong> - Email and LinkedIn outreach stopped for human takeover.
+          </p>
+
+          <p style="color: #718096; font-size: 12px; margin-top: 24px;">
+            Lead ID: ${lead_id}<br>
+            Source: LinkedIn / HeyReach
+          </p>
+        </div>
+      `
+
+      const response = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${resendApiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          from: 'Sales Agent <notifications@jsbmedia.com>',
+          to: notifyEmails,
+          subject: `${emoji} LinkedIn ${levelText}: ${lead_name} at ${company_name}`,
+          html: htmlBody,
+        }),
+      })
+
+      if (!response.ok) {
+        const error = await response.text()
+        console.error('[LinkedIn Interested] Email send failed:', error)
+        return { sent: false, error }
+      }
+
+      console.log(`[LinkedIn Interested] Email notification sent to ${notifyEmails.join(', ')}`)
+      return { sent: true }
+    })
+
+    // Update notification status
+    await step.run('update-notification-status', async () => {
+      await supabase
+        .from('interested_leads')
+        .update({ slack_notified: true })
+        .eq('lead_id', lead_id)
+        .eq('reply_source', 'linkedin')
+        .order('created_at', { ascending: false })
+        .limit(1)
+    })
+
+    return { status: 'notified', lead_id, interest_level, source: 'linkedin' }
   }
 )

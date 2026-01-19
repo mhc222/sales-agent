@@ -30,10 +30,12 @@ export const generateAndDeploySequence = inngest.createFunction(
   },
   { event: 'orchestration.generate-sequence' },
   async ({ event, step }) => {
-    const { lead_id, tenant_id, campaign_mode } = event.data as {
+    const { lead_id, tenant_id, campaign_mode, brand_id, campaign_id } = event.data as {
       lead_id: string
       tenant_id: string
       campaign_mode: CampaignMode
+      brand_id?: string
+      campaign_id?: string
     }
 
     // Step 1: Get lead data
@@ -46,6 +48,42 @@ export const generateAndDeploySequence = inngest.createFunction(
 
       if (error || !data) throw new Error(`Lead not found: ${lead_id}`)
       return data
+    })
+
+    // Step 1b: Fetch brand and campaign context for sequence generation
+    const { brand, campaign } = await step.run('fetch-brand-campaign-context', async () => {
+      let brandData = null
+      let campaignData = null
+
+      // If campaign_id provided, fetch campaign with its brand
+      if (campaign_id) {
+        const { data } = await supabase
+          .from('campaigns')
+          .select('*, brand:brands(*)')
+          .eq('id', campaign_id)
+          .single()
+
+        if (data) {
+          campaignData = data
+          brandData = data.brand
+        }
+      }
+      // If only brand_id provided, fetch brand directly
+      else if (brand_id) {
+        const { data } = await supabase
+          .from('brands')
+          .select('*')
+          .eq('id', brand_id)
+          .single()
+
+        brandData = data
+      }
+
+      if (brandData) {
+        console.log(`[Orchestration] Using brand context: ${brandData.name}`)
+      }
+
+      return { brand: brandData, campaign: campaignData }
     })
 
     // Step 2: Get existing context profile (already built during research phase)
@@ -119,13 +157,42 @@ export const generateAndDeploySequence = inngest.createFunction(
       }
     })
 
-    // Step 4: Generate sequence
+    // Step 4: Generate sequence with brand context
     const sequence = await step.run('generate-sequence', async () => {
+      // Build brand context for the sequence generator
+      const brandContextForGenerator = brand ? {
+        id: brand.id,
+        name: brand.name,
+        voice_tone: brand.voice_tone,
+        value_proposition: brand.value_proposition,
+        key_differentiators: brand.key_differentiators,
+        target_industries: brand.target_industries,
+      } : undefined
+
+      // Build campaign context for the sequence generator
+      const campaignContextForGenerator = campaign ? {
+        id: campaign.id,
+        name: campaign.name,
+        mode: campaign.mode || campaign_mode,
+        custom_instructions: campaign.custom_instructions,
+        target_persona: campaign.target_persona,
+        primary_angle: campaign.primary_angle,
+        email_count: campaign.email_count || 7,
+        linkedin_count: campaign.linkedin_count || 4,
+        email_tone: campaign.email_tone,
+        email_cta: campaign.email_cta,
+        linkedin_first: campaign.linkedin_first || false,
+        wait_for_connection: campaign.wait_for_connection || true,
+        connection_timeout_hours: campaign.connection_timeout_hours || 72,
+      } : undefined
+
       return await generateMultiChannelSequence({
         lead,
         contextProfile,
         research,
         campaignMode: campaign_mode,
+        brand: brandContextForGenerator,
+        campaign: campaignContextForGenerator,
       })
     })
 

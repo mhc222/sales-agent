@@ -177,6 +177,20 @@ async function handleEmailOpen(
         open_count: newOpenCount,
       },
     })
+
+    // Emit orchestration event for cross-channel coordination
+    await inngest.send({
+      name: 'smartlead.orchestration-event',
+      data: {
+        lead_id: lead.id,
+        event_type: 'EMAIL_OPEN',
+        event_data: {
+          campaign_id: payload.campaign_id,
+          sequence_number: payload.sequence_number,
+          open_count: newOpenCount,
+        },
+      },
+    })
   }
 
   // Track in learning system
@@ -240,6 +254,18 @@ async function handleEmailClick(
       tenant_id: tenantId,
       event_type: 'email.clicked',
       metadata: { campaign_id: payload.campaign_id },
+    })
+
+    // Emit orchestration event for cross-channel coordination
+    await inngest.send({
+      name: 'smartlead.orchestration-event',
+      data: {
+        lead_id: lead.id,
+        event_type: 'EMAIL_LINK_CLICK',
+        event_data: {
+          campaign_id: payload.campaign_id,
+        },
+      },
     })
   }
 
@@ -350,6 +376,23 @@ async function handleEmailReply(
     },
   })
 
+  // Emit orchestration event for cross-channel coordination
+  // This will trigger decision-making (e.g., stop LinkedIn on negative reply)
+  if (lead) {
+    await inngest.send({
+      name: 'smartlead.orchestration-event',
+      data: {
+        lead_id: lead.id,
+        event_type: 'EMAIL_REPLY',
+        event_data: {
+          campaign_id: payload.campaign_id,
+          reply_text: payload.reply_text,
+          reply_subject: payload.reply_subject,
+        },
+      },
+    })
+  }
+
   console.log(`[Smartlead Webhook] Reply received from ${payload.email}, queued for classification`)
 }
 
@@ -441,6 +484,22 @@ async function handleEmailBounce(
       campaign_id: payload.campaign_id,
     },
   })
+
+  // Emit orchestration event - bounce should stop all outreach
+  if (lead) {
+    await inngest.send({
+      name: 'smartlead.orchestration-event',
+      data: {
+        lead_id: lead.id,
+        event_type: 'EMAIL_BOUNCE',
+        event_data: {
+          campaign_id: payload.campaign_id,
+          bounce_type: payload.bounce_type,
+          bounce_reason: payload.bounce_reason,
+        },
+      },
+    })
+  }
 
   console.log(`[Smartlead Webhook] Bounce recorded: ${payload.email} (${payload.bounce_type})`)
 }

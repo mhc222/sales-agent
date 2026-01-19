@@ -102,3 +102,12 @@ export async function checkOnboardingComplete(): Promise<boolean> {
   const tenant = await getCurrentTenant()
   return tenant?.tenant?.settings?.onboarding_completed === true
 }
+
+/**
+ * Get the current tenant ID for API routes.
+ * Returns null if not authenticated or no tenant found.
+ */
+export async function getTenantId(request?: Request): Promise<string | null> {
+  const tenant = await getCurrentTenant()
+  return tenant?.tenant_id || null
+}

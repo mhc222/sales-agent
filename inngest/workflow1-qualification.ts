@@ -1,7 +1,8 @@
 import { inngest } from './client'
-import { qualifyNormalizedLead, type ExistingRecords } from '../src/agents/agent1-qualification'
+import { qualifyNormalizedLead, type ExistingRecords, type BrandContext } from '../src/agents/agent1-qualification'
 import { supabase, type Lead } from '../src/lib/supabase'
 import { normalizeLead, type NormalizedLead } from '../src/lib/data-normalizer'
+import type { Brand, Campaign } from '../src/lib/brands'
 
 type LeadSource = 'pixel' | 'intent' | 'apollo'
 
@@ -27,6 +28,9 @@ interface LeadIngestedEvent {
     tenant_id: string
     source?: LeadSource
     source_metadata?: Record<string, unknown>
+    // Brand/campaign context (optional - for campaign-sourced leads)
+    brand_id?: string
+    campaign_id?: string
   }
 }
 
@@ -296,6 +300,44 @@ export const qualificationAndResearch = inngest.createFunction(
 
     console.log(`[Workflow 1] System presence - GHL: ${inGhl}, GHL Company: ${inGhlCompany}, Smartlead: ${inSmartlead}, HeyReach: ${inHeyreach}`)
 
+    // Step 5b: Fetch brand and campaign context if provided
+    const brandContext = await step.run('fetch-brand-context', async () => {
+      let brand: Brand | undefined
+      let campaign: Campaign | undefined
+
+      // If campaign_id provided, fetch campaign and its brand
+      if (eventData.campaign_id) {
+        const { data: campaignData } = await supabase
+          .from('campaigns')
+          .select('*, brand:brands(*)')
+          .eq('id', eventData.campaign_id)
+          .single()
+
+        if (campaignData) {
+          campaign = campaignData as Campaign
+          brand = campaignData.brand as Brand
+        }
+      }
+      // If only brand_id provided (no campaign), fetch just the brand
+      else if (eventData.brand_id) {
+        const { data: brandData } = await supabase
+          .from('brands')
+          .select('*')
+          .eq('id', eventData.brand_id)
+          .single()
+
+        if (brandData) {
+          brand = brandData as Brand
+        }
+      }
+
+      if (brand) {
+        console.log(`[Workflow 1] Using brand context: ${brand.name}`)
+      }
+
+      return { brand, campaign } as BrandContext
+    })
+
     // Step 6: Check if we should run qualification or skip (for returning visitors)
     const hasExistingQualification = existingLead?.qualification_decision != null
     const autoQualifyThreshold = 5 // 5+ visits = auto-qualify (strong intent)
@@ -387,7 +429,8 @@ export const qualificationAndResearch = inngest.createFunction(
         ...normalizedData,
         visitCount: lead.visit_count || 1,
       }
-      return await qualifyNormalizedLead(normalizedWithVisitCount, existingRecords as ExistingRecords)
+      // Pass brand context for brand-specific ICP qualification
+      return await qualifyNormalizedLead(normalizedWithVisitCount, existingRecords as ExistingRecords, brandContext)
     })
 
     console.log(`[Workflow 1] Qualification decision: ${qualification.decision} (confidence: ${qualification.confidence})`)

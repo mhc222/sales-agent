@@ -17,6 +17,7 @@ import type {
   SequenceStrategy,
   MultiChannelSequenceInput,
 } from '../lib/orchestration/types'
+import { getICPForLead, formatICPForPrompt } from '../lib/tenant-settings'
 
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
@@ -83,6 +84,7 @@ interface GeneratedSequence {
 /**
  * Load fundamentals for email and LinkedIn
  * Prioritizes brand-level RAG over tenant-level
+ * Also loads brand-specific or tenant-level ICP
  */
 async function loadFundamentals(tenantId: string, brandId?: string): Promise<{
   emailPlaybook: string
@@ -90,7 +92,11 @@ async function loadFundamentals(tenantId: string, brandId?: string): Promise<{
   messagingRag: string
   antiPatterns: string
   brandGuidelines: string
+  icpContext: string
 }> {
+  // Load brand-specific or tenant-level ICP
+  const icp = await getICPForLead(tenantId, brandId)
+  const icpContext = icp ? formatICPForPrompt(icp) : ''
   // Load brand-specific RAG if brand provided
   let brandRag: Array<{ content: string; rag_type: string; metadata: Record<string, unknown> | null }> = []
   if (brandId) {
@@ -146,7 +152,7 @@ async function loadFundamentals(tenantId: string, brandId?: string): Promise<{
     .map(d => d.content)
     .join('\n\n') || ''
 
-  return { emailPlaybook, linkedinPlaybook, messagingRag, antiPatterns, brandGuidelines }
+  return { emailPlaybook, linkedinPlaybook, messagingRag, antiPatterns, brandGuidelines, icpContext }
 }
 
 // ============================================================================
@@ -161,6 +167,7 @@ function buildMultiChannelPrompt(
     messagingRag: string
     antiPatterns: string
     brandGuidelines: string
+    icpContext: string
   }
 ): string {
   const { lead, contextProfile, research, campaignMode, preferences, campaign, brand } = input
@@ -180,6 +187,15 @@ ${campaign.primary_angle ? `Primary Angle: ${campaign.primary_angle}` : ''}
 ${campaign.email_cta ? `Email CTA: ${campaign.email_cta}` : ''}
 
 ${campaign.custom_instructions ? `Custom Instructions:\n${campaign.custom_instructions}` : ''}
+` : ''
+
+  // Build ICP context section
+  const icpSection = fundamentals.icpContext ? `
+================================================================================
+IDEAL CUSTOMER PROFILE (ICP)
+================================================================================
+
+${fundamentals.icpContext}
 ` : ''
 
   // Build brand context section
@@ -206,6 +222,7 @@ CAMPAIGN MODE: ${campaignMode.toUpperCase()}
 ${modeInstructions}
 ${campaignInstructions}
 ${brandContext}
+${icpSection}
 ================================================================================
 TIMELINE
 ================================================================================
