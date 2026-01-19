@@ -8,13 +8,10 @@ const ONBOARDING_ROUTE = '/onboarding'
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
 
-  // Allow static files, API webhooks, and onboarding API
+  // Allow static files and API routes
   if (
     pathname.startsWith('/_next') ||
-    pathname.startsWith('/api/webhooks') ||
-    pathname.startsWith('/api/cron') ||
-    pathname.startsWith('/api/inngest') ||
-    pathname.startsWith('/api/onboarding') ||
+    pathname.startsWith('/api/') ||
     pathname.includes('.') // Static files
   ) {
     return NextResponse.next()
