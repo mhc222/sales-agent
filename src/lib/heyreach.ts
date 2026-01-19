@@ -461,3 +461,172 @@ export function formatLeadForHeyReach(lead: {
     email: lead.email,
   }
 }
+
+// ============================================================================
+// MULTI-CHANNEL CAMPAIGN SUPPORT
+// ============================================================================
+
+// Default fallback messages when AI-generated content is not available
+// These reference the email channel since this is multi-channel outreach
+const DEFAULT_FALLBACKS = {
+  connection_note: "Hey - sent you an email recently, thought I'd connect here too.",
+  linkedin_message_1: "Thanks for connecting! Wanted to follow up on the email I sent - did it land?",
+  linkedin_message_2: "Hey - circling back on my email. Easier to chat here if you prefer LinkedIn.",
+  linkedin_message_3: "Last note - sent a few emails your way. If LinkedIn works better, happy to chat here instead.",
+}
+
+/**
+ * Format a multi-channel LinkedIn sequence into HeyReach custom fields
+ * The AI writing agent generates the content, we just pass it to HeyReach as variables
+ *
+ * HeyReach campaign template uses: {{connection_note}}, {{linkedin_message_1}}, etc.
+ * Each field also has a _fallback version for when the variable is empty
+ */
+export function formatLinkedInSequenceAsCustomFields(sequence: {
+  linkedin_steps: Array<{
+    step_number: number
+    type: 'connection_request' | 'message' | 'view_profile' | 'follow' | 'like_post' | 'inmail'
+    body?: string
+    body_fallback?: string
+    connection_note?: string
+    connection_note_fallback?: string
+    body_email_opened?: string
+    body_email_replied?: string
+  }>
+}): Record<string, string> {
+  const fields: Record<string, string> = {}
+
+  let messageCount = 0
+
+  for (const step of sequence.linkedin_steps) {
+    if (step.type === 'connection_request') {
+      // Always populate connection_note - use AI content, AI fallback, or our default
+      // HeyReach fallback field must be static text in the UI, not a variable
+      fields.connection_note = step.connection_note || step.connection_note_fallback || DEFAULT_FALLBACKS.connection_note
+    } else if (step.type === 'message' && step.body) {
+      messageCount++
+      fields[`linkedin_message_${messageCount}`] = step.body
+
+      // Store fallback for HeyReach (uses AI fallback or our default)
+      const defaultFallback = DEFAULT_FALLBACKS[`linkedin_message_${messageCount}` as keyof typeof DEFAULT_FALLBACKS] || DEFAULT_FALLBACKS.linkedin_message_3
+      fields[`linkedin_message_${messageCount}_fallback`] = step.body_fallback || defaultFallback
+
+      // Store conditional copies if they exist
+      if (step.body_email_opened) {
+        fields[`linkedin_message_${messageCount}_email_opened`] = step.body_email_opened
+      }
+      if (step.body_email_replied) {
+        fields[`linkedin_message_${messageCount}_email_replied`] = step.body_email_replied
+      }
+    } else if (step.type === 'inmail' && step.body) {
+      fields[`inmail_${step.step_number}`] = step.body
+    }
+  }
+
+  return fields
+}
+
+/**
+ * Deploy a lead to the multi-channel HeyReach campaign
+ * Combines adding lead + setting up custom fields with AI-generated content
+ */
+export async function deployLeadToMultiChannelCampaign(
+  config: HeyReachConfig,
+  campaignId: string,
+  lead: {
+    linkedin_url: string
+    first_name?: string
+    last_name?: string
+    company_name?: string
+    job_title?: string
+    email?: string
+  },
+  sequence: {
+    linkedin_steps: Array<{
+      step_number: number
+      type: 'connection_request' | 'message' | 'view_profile' | 'follow' | 'like_post' | 'inmail'
+      body?: string
+      body_fallback?: string
+      connection_note?: string
+      connection_note_fallback?: string
+      body_email_opened?: string
+      body_email_replied?: string
+    }>
+  },
+  senderId?: string
+): Promise<{ success: boolean; leadId?: string; error?: string }> {
+  // Format sequence into custom fields
+  const customFields = formatLinkedInSequenceAsCustomFields(sequence)
+
+  console.log(`[HeyReach] Deploying lead ${lead.linkedin_url} with ${Object.keys(customFields).length} custom fields`)
+
+  return addLeadToCampaign(config, {
+    campaignId,
+    linkedinUrl: lead.linkedin_url,
+    firstName: lead.first_name,
+    lastName: lead.last_name,
+    companyName: lead.company_name,
+    jobTitle: lead.job_title,
+    email: lead.email,
+    senderId,
+    customFields,
+  })
+}
+
+/**
+ * Update lead custom fields for conditional copy
+ * Called when email engagement signals should change LinkedIn messaging
+ */
+export async function updateLeadCustomFieldsForState(
+  config: HeyReachConfig,
+  campaignId: string,
+  leadLinkedInUrl: string,
+  sequence: {
+    linkedin_steps: Array<{
+      step_number: number
+      type: string
+      body?: string
+      body_fallback?: string
+      body_email_opened?: string
+      body_email_replied?: string
+    }>
+  },
+  state: {
+    email_opened?: boolean
+    email_replied?: boolean
+    linkedin_step_current: number
+  }
+): Promise<void> {
+  const updates: Record<string, string> = {}
+
+  let messageCount = 0
+  for (const step of sequence.linkedin_steps) {
+    if (step.type === 'message' && step.body) {
+      messageCount++
+
+      // Skip messages already sent
+      if (step.step_number <= state.linkedin_step_current) {
+        continue
+      }
+
+      // Select appropriate copy based on email state
+      let body = step.body
+      if (state.email_replied && step.body_email_replied) {
+        body = step.body_email_replied
+      } else if (state.email_opened && step.body_email_opened) {
+        body = step.body_email_opened
+      }
+
+      updates[`linkedin_message_${messageCount}`] = body
+    }
+  }
+
+  if (Object.keys(updates).length > 0) {
+    // HeyReach doesn't have a direct "update custom fields" API
+    // The custom fields are set when the lead is added
+    // For conditional copy, we'd need to use tags or manual intervention
+    console.log(`[HeyReach] Would update ${Object.keys(updates).length} custom fields for ${leadLinkedInUrl}`)
+    console.log(`[HeyReach] Note: HeyReach doesn't support updating custom fields after lead is added`)
+    // TODO: Explore alternative approaches (tags, separate campaigns, etc.)
+  }
+}

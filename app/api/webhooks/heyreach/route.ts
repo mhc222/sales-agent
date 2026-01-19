@@ -146,6 +146,19 @@ async function handleConnectionAccepted(
         campaign_id: payload.campaign_id,
       },
     })
+
+    // Emit orchestration event - connection affects email copy selection
+    await inngest.send({
+      name: 'heyreach.orchestration-event',
+      data: {
+        lead_id: lead.id,
+        event_type: 'connection_accepted',
+        event_data: {
+          campaign_id: payload.campaign_id,
+          linkedin_url: payload.linkedin_url,
+        },
+      },
+    })
   }
 
   console.log(`[HeyReach Webhook] Connection accepted: ${payload.linkedin_url}`)
@@ -215,6 +228,22 @@ async function handleMessageReceived(
         company_name: lead.company_name,
       },
     })
+
+    // Emit orchestration event - reply triggers cross-channel decisions
+    // (e.g., stop email on negative LinkedIn reply)
+    await inngest.send({
+      name: 'heyreach.orchestration-event',
+      data: {
+        lead_id: lead.id,
+        event_type: 'reply_received',
+        event_data: {
+          campaign_id: payload.campaign_id,
+          linkedin_url: payload.linkedin_url,
+          message: messageText,
+          conversation_id: payload.conversation_id,
+        },
+      },
+    })
   }
 
   console.log(`[HeyReach Webhook] Reply received from ${payload.linkedin_url}`)
@@ -236,6 +265,20 @@ async function handleMessageSent(
       metadata: {
         campaign_id: payload.campaign_id,
         conversation_id: payload.conversation_id,
+      },
+    })
+
+    // Emit orchestration event for tracking
+    await inngest.send({
+      name: 'heyreach.orchestration-event',
+      data: {
+        lead_id: lead.id,
+        event_type: 'message_sent',
+        event_data: {
+          campaign_id: payload.campaign_id,
+          linkedin_url: payload.linkedin_url,
+          conversation_id: payload.conversation_id,
+        },
       },
     })
   }
@@ -267,6 +310,19 @@ async function handleConnectionRequestSent(
       event_type: 'linkedin.connection_requested',
       metadata: {
         campaign_id: payload.campaign_id,
+      },
+    })
+
+    // Emit orchestration event for tracking
+    await inngest.send({
+      name: 'heyreach.orchestration-event',
+      data: {
+        lead_id: lead.id,
+        event_type: 'connection_request_sent',
+        event_data: {
+          campaign_id: payload.campaign_id,
+          linkedin_url: payload.linkedin_url,
+        },
       },
     })
   }
