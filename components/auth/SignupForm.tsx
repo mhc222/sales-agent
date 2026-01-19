@@ -35,7 +35,7 @@ export default function SignupForm() {
 
     try {
       const supabase = createClient()
-      const { error } = await supabase.auth.signUp({
+      const { data, error } = await supabase.auth.signUp({
         email,
         password,
         options: {
@@ -51,6 +51,14 @@ export default function SignupForm() {
         return
       }
 
+      // If user is immediately confirmed (no email confirmation required), redirect
+      if (data.session) {
+        router.push('/account')
+        router.refresh()
+        return
+      }
+
+      // Otherwise show the check email message
       setSuccess(true)
     } catch (err) {
       setError('An unexpected error occurred')
