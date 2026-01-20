@@ -76,13 +76,13 @@ type OnboardingData = {
 
 // Steps are dynamically computed based on channel selections
 // Note: Apollo and AudienceLab steps removed - data sources are now campaign-level
-// Order: Company → Brand Setup (ICP, Channels) → Integrations (LLM, Email, LinkedIn, CRM) → DNC
+// Order: AI Provider (needed for ICP research) → Company → ICP → Channels → Integrations → DNC
 const getSteps = (channels: OnboardingData['channels']) => {
   const baseSteps = [
+    { id: 'llm', title: 'AI Provider' },
     { id: 'company', title: 'Company' },
     { id: 'icp', title: 'ICP' },
     { id: 'channels', title: 'Channels' },
-    { id: 'llm', title: 'AI Provider' },
   ]
 
   // Safely access arrays with fallback to empty arrays
