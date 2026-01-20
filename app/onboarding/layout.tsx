@@ -1,3 +1,5 @@
+'use client'
+
 import { jsb, cn } from '@/lib/styles'
 
 export default function OnboardingLayout({
