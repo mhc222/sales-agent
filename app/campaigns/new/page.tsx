@@ -429,10 +429,10 @@ export default function NewCampaignPage() {
           {currentStep === 'dataSource' && (
             <DataSourceStep
               data={dataSource}
+              brandIcp={selectedBrand?.icp}
               onChange={setDataSource}
               onNext={goNext}
               onBack={goBack}
-              hideNavigation={true}
             />
           )}
 
@@ -515,43 +515,45 @@ export default function NewCampaignPage() {
             </div>
           )}
 
-          {/* Navigation Buttons */}
-          <div className="flex gap-3 mt-8 pt-6 border-t border-jsb-navy-lighter">
-            {canGoBack && (
-              <button
-                onClick={goBack}
-                className={cn(jsb.buttonGhost, 'px-6 py-3')}
-              >
-                Back
-              </button>
-            )}
+          {/* Navigation Buttons - Hide for dataSource step (has its own navigation) */}
+          {currentStep !== 'dataSource' && (
+            <div className="flex gap-3 mt-8 pt-6 border-t border-jsb-navy-lighter">
+              {canGoBack && (
+                <button
+                  onClick={goBack}
+                  className={cn(jsb.buttonGhost, 'px-6 py-3')}
+                >
+                  Back
+                </button>
+              )}
 
-            {currentStep === 'review' ? (
-              <button
-                onClick={handleSubmit}
-                disabled={submitting}
-                className={cn(
-                  jsb.buttonPrimary,
-                  'flex-1 py-3',
-                  submitting && 'opacity-50 cursor-not-allowed'
-                )}
-              >
-                {submitting ? 'Creating Campaign...' : 'Create Campaign'}
-              </button>
-            ) : (
-              <button
-                onClick={goNext}
-                disabled={!canProceed()}
-                className={cn(
-                  jsb.buttonPrimary,
-                  'flex-1 py-3',
-                  !canProceed() && 'opacity-50 cursor-not-allowed'
-                )}
-              >
-                Continue
-              </button>
-            )}
-          </div>
+              {currentStep === 'review' ? (
+                <button
+                  onClick={handleSubmit}
+                  disabled={submitting}
+                  className={cn(
+                    jsb.buttonPrimary,
+                    'flex-1 py-3',
+                    submitting && 'opacity-50 cursor-not-allowed'
+                  )}
+                >
+                  {submitting ? 'Creating Campaign...' : 'Create Campaign'}
+                </button>
+              ) : (
+                <button
+                  onClick={goNext}
+                  disabled={!canProceed()}
+                  className={cn(
+                    jsb.buttonPrimary,
+                    'flex-1 py-3',
+                    !canProceed() && 'opacity-50 cursor-not-allowed'
+                  )}
+                >
+                  Continue
+                </button>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </Shell>
