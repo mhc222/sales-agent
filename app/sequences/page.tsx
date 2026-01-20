@@ -9,6 +9,8 @@ import { LoadingState } from '../../components/ui/LoadingSpinner'
 import { NoSequencesEmptyState } from '../../components/ui/EmptyState'
 import { cn, badgeColors } from '../../lib/styles'
 
+export const dynamic = 'force-dynamic'
+
 interface Sequence {
   id: string
   leadId: string
