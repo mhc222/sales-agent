@@ -3,6 +3,7 @@ import { createServiceClient } from './supabase-server'
 export type DNCEntry = {
   id: string
   tenant_id: string
+  brand_id: string | null
   email: string | null
   domain: string | null
   reason: string | null
@@ -10,52 +11,99 @@ export type DNCEntry = {
   created_at: string
 }
 
+export interface DNCCheckResult {
+  blocked: string[]
+  allowed: string[]
+  blockReasons: Record<string, string>
+}
+
+/**
+ * Check if emails are on the DNC list
+ * Checks both tenant-wide and brand-specific entries
+ *
+ * @param tenantId - The tenant ID to check
+ * @param emails - Array of emails to check
+ * @param brandId - Optional brand ID for brand-specific checking
+ */
 export async function checkDNC(
   tenantId: string,
-  emails: string[]
-): Promise<{ blocked: string[]; allowed: string[] }> {
+  emails: string[],
+  brandId?: string
+): Promise<DNCCheckResult> {
   const serviceClient = createServiceClient()
 
   const normalizedEmails = emails.map((e) => e.toLowerCase())
-  const domains = normalizedEmails.map((e) => e.split('@')[1]).filter(Boolean)
 
-  const { data: dncEntries } = await serviceClient
+  // Fetch DNC entries for tenant (tenant-wide + brand-specific if brandId provided)
+  let query = serviceClient
     .from('do_not_contact')
-    .select('email, domain')
+    .select('email, domain, brand_id')
     .eq('tenant_id', tenantId)
+
+  // If brandId provided, get both tenant-wide (brand_id is null) and brand-specific entries
+  // If no brandId, only get tenant-wide entries
+  if (brandId) {
+    query = query.or(`brand_id.is.null,brand_id.eq.${brandId}`)
+  } else {
+    query = query.is('brand_id', null)
+  }
+
+  const { data: dncEntries } = await query
 
   const blockedEmails = new Set<string>()
   const blockedDomains = new Set<string>()
 
-  dncEntries?.forEach((entry: { email: string | null; domain: string | null }) => {
+  dncEntries?.forEach((entry: { email: string | null; domain: string | null; brand_id: string | null }) => {
     if (entry.email) blockedEmails.add(entry.email.toLowerCase())
     if (entry.domain) blockedDomains.add(entry.domain.toLowerCase())
   })
 
   const blocked: string[] = []
   const allowed: string[] = []
+  const blockReasons: Record<string, string> = {}
 
   normalizedEmails.forEach((email) => {
     const domain = email.split('@')[1]
-    if (blockedEmails.has(email) || (domain && blockedDomains.has(domain))) {
+    if (blockedEmails.has(email)) {
       blocked.push(email)
+      blockReasons[email] = 'Email on DNC list'
+    } else if (domain && blockedDomains.has(domain)) {
+      blocked.push(email)
+      blockReasons[email] = `Domain @${domain} on DNC list`
     } else {
       allowed.push(email)
     }
   })
 
-  return { blocked, allowed }
+  return { blocked, allowed, blockReasons }
+}
+
+/**
+ * Check a single email against DNC (convenience wrapper)
+ */
+export async function isOnDNC(
+  tenantId: string,
+  email: string,
+  brandId?: string
+): Promise<{ blocked: boolean; reason?: string }> {
+  const result = await checkDNC(tenantId, [email], brandId)
+  const blocked = result.blocked.length > 0
+  return {
+    blocked,
+    reason: blocked ? result.blockReasons[email.toLowerCase()] : undefined,
+  }
 }
 
 export async function addToDNC(
   tenantId: string,
-  entries: Array<{ type: 'email' | 'domain'; value: string; reason?: string }>,
+  entries: Array<{ type: 'email' | 'domain'; value: string; reason?: string; brandId?: string }>,
   addedBy?: string
 ): Promise<{ added: number; skipped: number }> {
   const serviceClient = createServiceClient()
 
   const toInsert = entries.map((entry) => ({
     tenant_id: tenantId,
+    brand_id: entry.brandId || null,
     email: entry.type === 'email' ? entry.value.toLowerCase() : null,
     domain: entry.type === 'domain' ? entry.value.toLowerCase() : null,
     reason: entry.reason || null,

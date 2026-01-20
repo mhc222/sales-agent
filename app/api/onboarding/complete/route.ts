@@ -36,7 +36,7 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json()
-    const { company, icp, channels, emailProvider, apollo, audienceLab, linkedIn, dnc, tenantId } = body
+    const { company, icp, channels, emailProvider, apollo, audienceLab, linkedIn, crm, dnc, tenantId } = body
 
     // Use service client for admin operations (bypasses RLS)
     const serviceClient = createServiceClient()
@@ -172,6 +172,15 @@ export async function POST(request: Request) {
       }
     }
 
+    // GHL CRM (optional)
+    if (crm?.apiKey && crm?.locationId && !crm.skip) {
+      integrations.gohighlevel = {
+        api_key: crm.apiKey,
+        location_id: crm.locationId,
+        enabled: true,
+      }
+    }
+
     // AudienceLab sources (only if audiencelab data source selected)
     if (dataSources.includes('audiencelab') && audienceLab?.sources?.length > 0 && !audienceLab.skip) {
       integrations.audiencelab = audienceLab.sources.slice(0, 5).map((s: AudienceLabSource & { intentKeywords?: string[]; audienceContext?: string }) => ({
@@ -200,6 +209,8 @@ export async function POST(request: Request) {
       email_provider: outreachChannels.includes('email') ? emailProvider?.provider : null,
       // Active linkedin provider (null if linkedin not selected)
       linkedin_provider: outreachChannels.includes('linkedin') && !linkedIn?.skip ? 'heyreach' : null,
+      // Active CRM provider (null if not configured)
+      crm_provider: crm?.apiKey && crm?.locationId && !crm.skip ? 'gohighlevel' : null,
       onboarding_completed: true,
       research_sources: ['apollo', 'perplexity'],
       // Use the selected outreach channels

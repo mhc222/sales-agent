@@ -96,6 +96,11 @@ export interface TenantIntegrations {
     campaign_id?: string
     enabled?: boolean
   }
+  gohighlevel?: {
+    api_key?: string
+    location_id?: string
+    enabled?: boolean
+  }
   // Legacy single-source configs (for backwards compat)
   pixel?: {
     api_url?: string
@@ -132,6 +137,7 @@ export interface TenantSettings {
   // Active providers (selected during onboarding)
   email_provider?: 'smartlead' | 'nureply' | 'instantly' | string
   linkedin_provider?: 'heyreach' | string
+  crm_provider?: 'gohighlevel' | string
   // Legacy aliases
   active_email_provider?: 'smartlead' | 'nureply' | 'instantly'
   active_linkedin_provider?: 'heyreach'

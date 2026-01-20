@@ -10,6 +10,7 @@ import EmailProviderStep from '@/components/onboarding/EmailProviderStep'
 import ApolloStep from '@/components/onboarding/ApolloStep'
 import AudienceLabStep from '@/components/onboarding/AudienceLabStep'
 import LinkedInStep from '@/components/onboarding/LinkedInStep'
+import CRMStep from '@/components/onboarding/CRMStep'
 import DNCStep from '@/components/onboarding/DNCStep'
 
 import type {
@@ -69,6 +70,12 @@ type OnboardingData = {
     apiKey: string
     skip: boolean
   }
+  crm: {
+    provider: 'gohighlevel' | ''
+    apiKey: string
+    locationId: string
+    skip: boolean
+  }
   dnc: {
     entries: Array<{ type: 'email' | 'domain'; value: string }>
     skip: boolean
@@ -83,25 +90,32 @@ const getSteps = (channels: OnboardingData['channels']) => {
     { id: 'channels', title: 'Channels' },
   ]
 
+  // Safely access arrays with fallback to empty arrays
+  const dataSources = channels?.dataSources || []
+  const outreachChannels = channels?.outreachChannels || []
+
   // Add Apollo step if selected as data source
-  if (channels.dataSources.includes('apollo')) {
+  if (dataSources.includes('apollo')) {
     baseSteps.push({ id: 'apollo', title: 'Apollo' })
   }
 
   // Add email provider step if email channel selected
-  if (channels.outreachChannels.includes('email')) {
+  if (outreachChannels.includes('email')) {
     baseSteps.push({ id: 'email', title: 'Email Provider' })
   }
 
   // Add AudienceLab step if selected as data source
-  if (channels.dataSources.includes('audiencelab')) {
+  if (dataSources.includes('audiencelab')) {
     baseSteps.push({ id: 'audiencelab', title: 'Data Sources' })
   }
 
   // Add LinkedIn step if linkedin channel selected
-  if (channels.outreachChannels.includes('linkedin')) {
+  if (outreachChannels.includes('linkedin')) {
     baseSteps.push({ id: 'linkedin', title: 'LinkedIn' })
   }
+
+  // Always add CRM step (optional integration)
+  baseSteps.push({ id: 'crm', title: 'CRM' })
 
   // Always end with DNC
   baseSteps.push({ id: 'dnc', title: 'Do Not Contact' })
@@ -126,6 +140,7 @@ const defaultData: OnboardingData = {
   apollo: { apiKey: '' },
   audienceLab: { sources: [], skip: false },
   linkedIn: { provider: '', apiKey: '', skip: false },
+  crm: { provider: '', apiKey: '', locationId: '', skip: false },
   dnc: { entries: [], skip: false },
 }
 
@@ -141,12 +156,40 @@ export default function OnboardingPage() {
 
   // Restore progress from localStorage on mount
   useEffect(() => {
+    // Helper to merge objects, filtering out undefined values
+    const mergeWithDefaults = <T extends Record<string, unknown>>(
+      defaults: T,
+      saved: Partial<T> | undefined
+    ): T => {
+      if (!saved) return defaults
+      const result = { ...defaults }
+      for (const key of Object.keys(saved) as (keyof T)[]) {
+        if (saved[key] !== undefined) {
+          result[key] = saved[key] as T[keyof T]
+        }
+      }
+      return result
+    }
+
     try {
       const saved = localStorage.getItem(STORAGE_KEY)
       if (saved) {
         const parsed = JSON.parse(saved)
         if (parsed.data && parsed.step !== undefined) {
-          setData(parsed.data)
+          // Merge restored data with defaults, filtering out undefined values
+          const savedData = parsed.data
+          const mergedData: OnboardingData = {
+            company: mergeWithDefaults(defaultData.company, savedData.company),
+            icp: mergeWithDefaults(defaultData.icp, savedData.icp),
+            channels: mergeWithDefaults(defaultData.channels, savedData.channels),
+            emailProvider: mergeWithDefaults(defaultData.emailProvider, savedData.emailProvider),
+            apollo: mergeWithDefaults(defaultData.apollo, savedData.apollo),
+            audienceLab: mergeWithDefaults(defaultData.audienceLab, savedData.audienceLab),
+            linkedIn: mergeWithDefaults(defaultData.linkedIn, savedData.linkedIn),
+            crm: mergeWithDefaults(defaultData.crm, savedData.crm),
+            dnc: mergeWithDefaults(defaultData.dnc, savedData.dnc),
+          }
+          setData(mergedData)
           setCurrentStep(parsed.step)
           setRestored(true)
           setShowRestoredBanner(true)
@@ -156,6 +199,8 @@ export default function OnboardingPage() {
       }
     } catch (e) {
       console.error('Failed to restore onboarding progress:', e)
+      // Clear corrupted data
+      localStorage.removeItem(STORAGE_KEY)
     }
   }, [])
 
@@ -393,6 +438,15 @@ export default function OnboardingPage() {
           <LinkedInStep
             data={data.linkedIn}
             onChange={(linkedIn) => updateData({ linkedIn })}
+            onNext={goNext}
+            onBack={goBack}
+          />
+        )}
+
+        {currentStepId === 'crm' && (
+          <CRMStep
+            data={data.crm}
+            onChange={(crm) => updateData({ crm })}
             onNext={goNext}
             onBack={goBack}
           />

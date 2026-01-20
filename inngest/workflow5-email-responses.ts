@@ -21,6 +21,8 @@ import { classifyReply, type ClassificationResult } from '../src/lib/reply-class
 import { forwardPositiveReply, isOutlookForwardingConfigured } from '../src/lib/outlook-forwarder'
 import * as orchestrator from '../src/lib/orchestration/orchestrator'
 import * as smartlead from '../src/lib/smartlead'
+import * as ghl from '../src/lib/gohighlevel'
+import { getTenantSettings } from '../src/lib/tenant-settings'
 
 // ============================================================================
 // REPLY CLASSIFICATION WORKFLOW
@@ -225,6 +227,17 @@ async function handleOutOfOffice(
         },
       })
     })
+
+    // Trigger GHL sync for out of office
+    await step.sendEvent('sync-ooo-to-ghl', {
+      name: 'crm.sync-reply',
+      data: {
+        lead_id,
+        tenant_id,
+        email,
+        reply_category: 'out_of_office',
+      },
+    })
   }
 }
 
@@ -232,7 +245,7 @@ async function handleOutOfOffice(
 // NOT INTERESTED NOW HANDLER
 // ============================================================================
 async function handleNotInterestedNow(
-  step: { run: (id: string, fn: () => Promise<unknown>) => Promise<unknown> },
+  step: { run: (id: string, fn: () => Promise<unknown>) => Promise<unknown>; sendEvent: (id: string, event: { name: string; data: Record<string, unknown> }) => Promise<unknown> },
   data: {
     lead_id?: string
     tenant_id: string
@@ -301,6 +314,17 @@ async function handleNotInterestedNow(
         },
       })
     })
+
+    // Trigger GHL sync for nurture
+    await step.sendEvent('sync-nurture-to-ghl', {
+      name: 'crm.sync-reply',
+      data: {
+        lead_id,
+        tenant_id,
+        email,
+        reply_category: 'not_interested_now',
+      },
+    })
   }
 }
 
@@ -361,12 +385,12 @@ async function handleRemoveMe(
 
   // Trigger GHL sync
   await step.sendEvent('sync-to-ghl', {
-    name: 'smartlead.unsubscribed',
+    name: 'crm.sync-reply',
     data: {
       lead_id,
       tenant_id,
       email,
-      campaign_id,
+      reply_category: 'remove_me',
     },
   })
 }
@@ -440,6 +464,19 @@ async function handleInterested(
         lead_name,
         company_name,
         email,
+      },
+    })
+
+    // Trigger GHL sync for interested leads
+    await step.sendEvent('sync-interested-to-ghl', {
+      name: 'crm.sync-reply',
+      data: {
+        lead_id,
+        tenant_id,
+        email,
+        reply_category: 'interested',
+        lead_name,
+        company_name,
       },
     })
   }
@@ -697,100 +734,128 @@ export const interestedNotification = inngest.createFunction(
 )
 
 // ============================================================================
-// GHL UNSUBSCRIBE SYNC WORKFLOW
+// GHL REPLY SYNC WORKFLOW (Unified CRM Sync)
 // ============================================================================
-export const ghlUnsubscribeSync = inngest.createFunction(
+export const ghlReplySync = inngest.createFunction(
   {
-    id: 'ghl-unsubscribe-sync-v1',
-    name: 'GHL Unsubscribe Sync',
+    id: 'ghl-reply-sync-v1',
+    name: 'GHL Reply Sync',
     retries: 2,
   },
-  { event: 'smartlead.unsubscribed' },
+  { event: 'crm.sync-reply' },
   async ({ event, step }) => {
-    const { lead_id, tenant_id, email, campaign_id } = event.data
+    const { lead_id, tenant_id, email, reply_category, lead_name, company_name } = event.data as {
+      lead_id?: string
+      tenant_id: string
+      email?: string
+      reply_category: string
+      lead_name?: string
+      company_name?: string
+    }
 
-    console.log(`[GHL Sync] Syncing unsubscribe for: ${email}`)
+    console.log(`[GHL Sync] Syncing reply for: ${email}, category: ${reply_category}`)
 
-    // Check if we have GHL integration configured
-    const ghlApiKey = process.env.GHL_API_KEY
-    const ghlLocationId = process.env.GHL_LOCATION_ID
+    if (!email) {
+      console.log('[GHL Sync] No email provided, skipping sync')
+      return { status: 'skipped', reason: 'No email provided' }
+    }
 
-    if (!ghlApiKey || !ghlLocationId) {
-      console.log('[GHL Sync] GHL not configured, skipping sync')
+    // Get GHL config from tenant settings
+    const tenant = await step.run('get-tenant-settings', async () => {
+      return await getTenantSettings(tenant_id)
+    })
+
+    const ghlConfig = tenant?.settings?.integrations?.gohighlevel
+    if (!ghlConfig?.api_key || !ghlConfig?.location_id) {
+      console.log('[GHL Sync] GHL not configured for this tenant, skipping sync')
       return { status: 'skipped', reason: 'GHL not configured' }
     }
 
-    // Find or create contact in GHL
-    const ghlContact = await step.run('find-ghl-contact', async () => {
-      // Search for contact by email
-      const searchResponse = await fetch(
-        `https://services.leadconnectorhq.com/contacts/search?locationId=${ghlLocationId}&query=${encodeURIComponent(email || '')}`,
-        {
-          headers: {
-            Authorization: `Bearer ${ghlApiKey}`,
-            Version: '2021-07-28',
-          },
-        }
-      )
+    // Map reply category to GHL status
+    const statusMap: Record<string, ghl.ReplyStatus> = {
+      'interested': 'interested',
+      'not_interested_now': 'nurture',
+      'not_interested': 'not-interested',
+      'remove_me': 'do-not-contact',
+      'out_of_office': 'out-of-office',
+      'other': 'other',
+    }
 
-      if (!searchResponse.ok) {
-        console.error('[GHL Sync] Search failed:', await searchResponse.text())
-        return null
-      }
+    const ghlStatus = statusMap[reply_category] || 'other'
 
-      const searchData = await searchResponse.json()
-      return searchData.contacts?.[0] || null
+    // Get lead data for the sync
+    const leadData = await step.run('get-lead-data', async () => {
+      if (!lead_id) return null
+
+      const { data } = await supabase
+        .from('leads')
+        .select('first_name, last_name, company_name, linkedin_url')
+        .eq('id', lead_id)
+        .single()
+
+      return data
     })
 
-    if (ghlContact) {
-      // Update contact with DND (Do Not Disturb) status
-      await step.run('update-ghl-contact', async () => {
-        const updateResponse = await fetch(
-          `https://services.leadconnectorhq.com/contacts/${ghlContact.id}`,
+    // Sync to GHL
+    const syncResult = await step.run('sync-to-ghl', async () => {
+      try {
+        const result = await ghl.syncReplyStatusToGHL(
+          { apiKey: ghlConfig.api_key!, locationId: ghlConfig.location_id! },
+          email,
+          ghlStatus,
           {
-            method: 'PUT',
-            headers: {
-              Authorization: `Bearer ${ghlApiKey}`,
-              'Content-Type': 'application/json',
-              Version: '2021-07-28',
-            },
-            body: JSON.stringify({
-              dnd: true,
-              dndSettings: {
-                email: { status: 'active', message: 'Unsubscribed via Smartlead' },
-              },
-              tags: [...(ghlContact.tags || []), 'unsubscribed', 'smartlead-optout'],
-            }),
+            firstName: leadData?.first_name || lead_name?.split(' ')[0],
+            lastName: leadData?.last_name || lead_name?.split(' ').slice(1).join(' '),
+            companyName: leadData?.company_name || company_name,
+            linkedinUrl: leadData?.linkedin_url,
           }
         )
+        return result
+      } catch (error) {
+        console.error('[GHL Sync] Error syncing to GHL:', error)
+        throw error
+      }
+    })
 
-        if (!updateResponse.ok) {
-          console.error('[GHL Sync] Update failed:', await updateResponse.text())
-          throw new Error('Failed to update GHL contact')
-        }
-
-        console.log(`[GHL Sync] Updated GHL contact ${ghlContact.id} with DND`)
+    // Update lead with GHL contact ID
+    if (lead_id && syncResult.contactId) {
+      await step.run('update-lead-ghl-contact', async () => {
+        await supabase
+          .from('leads')
+          .update({
+            ghl_contact_id: syncResult.contactId,
+            ghl_synced_at: new Date().toISOString(),
+          })
+          .eq('id', lead_id)
       })
+    }
 
-      // Update our unsubscribed_emails record
-      await step.run('update-sync-status', async () => {
+    // For unsubscribes, also update the unsubscribed_emails table
+    if (reply_category === 'remove_me') {
+      await step.run('update-unsubscribe-sync-status', async () => {
         await supabase
           .from('unsubscribed_emails')
           .update({
             synced_to_ghl: true,
-            ghl_contact_id: ghlContact.id,
+            ghl_contact_id: syncResult.contactId,
           })
           .eq('email', email)
           .eq('tenant_id', tenant_id)
       })
-
-      return { status: 'synced', ghl_contact_id: ghlContact.id }
     }
 
-    console.log(`[GHL Sync] No GHL contact found for ${email}`)
-    return { status: 'no_contact', email }
+    console.log(`[GHL Sync] Successfully synced ${email} with status ${ghlStatus}`)
+    return {
+      status: 'synced',
+      ghl_contact_id: syncResult.contactId,
+      created: syncResult.created,
+      reply_category,
+    }
   }
 )
+
+// Legacy alias for backwards compatibility
+export const ghlUnsubscribeSync = ghlReplySync
 
 // ============================================================================
 // LINKEDIN REPLY CLASSIFICATION WORKFLOW

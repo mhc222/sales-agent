@@ -12,7 +12,7 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json()
-    const { provider, apiKey, apiUrl } = body
+    const { provider, apiKey, apiUrl, locationId } = body
 
     if (!provider) {
       return NextResponse.json(
@@ -121,6 +121,35 @@ export async function POST(request: Request) {
           success = res.ok
           if (!success) {
             message = `API returned ${res.status}: ${res.statusText}`
+          }
+        } catch (err) {
+          message = err instanceof Error ? err.message : 'Failed to connect'
+        }
+        break
+      }
+
+      case 'gohighlevel': {
+        if (!apiKey || !locationId) {
+          return NextResponse.json(
+            { success: false, error: 'API key and Location ID are required' },
+            { status: 400 }
+          )
+        }
+        try {
+          // Test by searching for contacts (validates both API key and location ID)
+          const res = await fetch(
+            `https://services.leadconnectorhq.com/contacts/?locationId=${locationId}&limit=1`,
+            {
+              headers: {
+                'Authorization': `Bearer ${apiKey}`,
+                'Version': '2021-07-28',
+              },
+            }
+          )
+          success = res.ok
+          if (!success) {
+            const errorData = await res.json().catch(() => ({}))
+            message = errorData.message || 'Invalid API key or Location ID'
           }
         } catch (err) {
           message = err instanceof Error ? err.message : 'Failed to connect'

@@ -427,8 +427,10 @@ export default function ICPStep({
     )
   }
 
-  // Show results
-  const { accountCriteria, personas, triggers } = data
+  // Show results - safely access arrays with fallbacks
+  const accountCriteria = data.accountCriteria
+  const personas = data.personas || []
+  const triggers = data.triggers || []
   const isValid = accountCriteria && personas.length > 0 && triggers.length > 0
 
   return (

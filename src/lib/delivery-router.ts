@@ -14,6 +14,7 @@ import { supabase } from './supabase'
 import * as smartlead from './smartlead'
 import * as nureply from './nureply'
 import * as heyreach from './heyreach'
+import { checkLeadDuplicates } from './deduplication'
 
 // ============================================================================
 // TYPES
@@ -445,6 +446,22 @@ export async function deliverEmail(
   tenantId: string,
   delivery: EmailSequenceDelivery
 ): Promise<DeliveryResult> {
+  // Check for duplicates before delivery
+  const dedupResult = await checkLeadDuplicates(
+    tenantId,
+    delivery.lead.email,
+    delivery.lead.linkedin_url
+  )
+
+  if (dedupResult.isDuplicate) {
+    console.log(`[DeliveryRouter] Skipping duplicate lead: ${delivery.lead.email} - ${dedupResult.skipReason}`)
+    return {
+      success: false,
+      provider: 'dedup',
+      error: dedupResult.skipReason || 'Lead is a duplicate',
+    }
+  }
+
   const settings = await getTenantSettings(tenantId)
   const provider = settings.email_provider || 'smartlead' // Default to smartlead
 
@@ -472,6 +489,22 @@ export async function deliverLinkedIn(
   tenantId: string,
   delivery: LinkedInMessageDelivery
 ): Promise<DeliveryResult> {
+  // Check for duplicates before delivery (using LinkedIn URL)
+  const dedupResult = await checkLeadDuplicates(
+    tenantId,
+    '', // No email for LinkedIn-only
+    delivery.lead.linkedin_url
+  )
+
+  if (dedupResult.isDuplicate) {
+    console.log(`[DeliveryRouter] Skipping duplicate LinkedIn lead: ${delivery.lead.linkedin_url} - ${dedupResult.skipReason}`)
+    return {
+      success: false,
+      provider: 'dedup',
+      error: dedupResult.skipReason || 'Lead is a duplicate',
+    }
+  }
+
   const settings = await getTenantSettings(tenantId)
   const provider = settings.linkedin_provider || 'heyreach' // Default to heyreach
 
