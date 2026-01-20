@@ -173,7 +173,7 @@ export async function POST(request: Request) {
 
     // Note: AudienceLab integration removed - data sources are now campaign-level
 
-    // Build ICP config from research data
+    // Build ICP config from research data - will be stored at brand level
     const icpConfig: TenantICP = {
       source_url: company.websiteUrl,
       account_criteria: icp.accountCriteria,
@@ -184,25 +184,20 @@ export async function POST(request: Request) {
 
     const settings = {
       integrations,
-      // LLM configuration
+      // LLM configuration (tenant-level, shared across brands)
       llm: {
         provider: llm.provider,
         api_key: llm.apiKey,
         ...(llm.model && { model: llm.model }),
       },
-      // Active email provider (null if email not selected)
+      // Active providers (tenant-level, shared across brands)
       email_provider: outreachChannels.includes('email') ? emailProvider?.provider : null,
-      // Active linkedin provider (null if linkedin not selected)
       linkedin_provider: outreachChannels.includes('linkedin') && !linkedIn?.skip ? 'heyreach' : null,
-      // Active CRM provider (null if not configured)
       crm_provider: crm?.apiKey && crm?.locationId && !crm.skip ? 'gohighlevel' : null,
       onboarding_completed: true,
-      research_sources: ['perplexity'], // Apollo now at campaign level
-      // Use the selected outreach channels
+      research_sources: ['perplexity'],
       enabled_channels: outreachChannels,
-      // Note: data_sources removed - now configured at campaign level
-      // ICP configuration from AI research
-      icp: icpConfig,
+      // Note: ICP moved to brand level - each brand has its own ICP
     }
 
     let tenant: { id: string; name: string; slug: string }
@@ -273,9 +268,31 @@ export async function POST(request: Request) {
       .update({ full_name: company.yourName })
       .eq('id', user.id)
 
-    // Seed RAG documents from ICP data
+    // Create first brand with ICP (each brand has its own ICP)
+    const { data: brand, error: brandError } = await serviceClient
+      .from('brands')
+      .insert({
+        tenant_id: tenant.id,
+        name: company.companyName, // Default first brand name = company name
+        description: `Primary brand for ${company.companyName}`,
+        website: company.websiteUrl,
+        voice_tone: 'professional',
+        is_active: true,
+        icp: icpConfig, // Brand-specific ICP
+        icp_source_url: company.websiteUrl,
+        icp_research_completed_at: new Date().toISOString(),
+      })
+      .select()
+      .single()
+
+    if (brandError || !brand) {
+      console.error('Brand creation error:', brandError)
+      return NextResponse.json({ error: 'Failed to create brand' }, { status: 500 })
+    }
+
+    // Seed RAG documents from ICP data (brand-specific)
     // Note: audienceLab parameter removed - data sources are now campaign-level
-    await seedRAGDocuments(serviceClient, tenant.id, company, icp)
+    await seedRAGDocuments(serviceClient, tenant.id, company, icp, brand.id)
 
     // Add DNC entries if provided
     if (dnc?.entries?.length > 0 && !dnc.skip) {
@@ -297,6 +314,10 @@ export async function POST(request: Request) {
         name: tenant.name,
         slug: tenant.slug,
       },
+      brand: {
+        id: brand.id,
+        name: brand.name,
+      },
     })
   } catch (error) {
     console.error('Onboarding complete error:', error)
@@ -307,17 +328,19 @@ export async function POST(request: Request) {
 // Note: AudienceLabOnboarding interface removed - data sources are now campaign-level
 
 /**
- * Seed RAG documents with tenant-specific content from onboarding
+ * Seed RAG documents with brand-specific content from onboarding
  * Note: audienceLab parameter removed - data sources are now campaign-level
  */
 async function seedRAGDocuments(
   supabase: ReturnType<typeof createServiceClient>,
   tenantId: string,
   company: { companyName: string; yourName: string; websiteUrl: string },
-  icp: ICPData
+  icp: ICPData,
+  brandId: string
 ) {
   const ragDocuments: Array<{
     tenant_id: string
+    brand_id: string
     rag_type: string
     content: string
     metadata: Record<string, unknown>
@@ -328,6 +351,7 @@ async function seedRAGDocuments(
     const ac = icp.accountCriteria
     ragDocuments.push({
       tenant_id: tenantId,
+      brand_id: brandId,
       rag_type: 'shared',
       content: `Ideal Customer Profile for ${company.companyName}:
 
@@ -365,6 +389,7 @@ ${ac.prospecting_signals.map((s) => `- ${s.value} (${s.priority} priority)`).joi
 
     ragDocuments.push({
       tenant_id: tenantId,
+      brand_id: brandId,
       rag_type: 'persona',
       content: `TARGET PERSONA: ${persona.job_title}
 
@@ -393,6 +418,7 @@ ADDITIONAL BENEFITS: ${persona.additional_benefits}`,
 
   ragDocuments.push({
     tenant_id: tenantId,
+      brand_id: brandId,
     rag_type: 'messaging',
     content: `Messaging Guidelines for ${company.companyName}:
 
@@ -416,6 +442,7 @@ ${benefits}`,
   if (icp.triggers.length > 0) {
     ragDocuments.push({
       tenant_id: tenantId,
+      brand_id: brandId,
       rag_type: 'shared',
       content: `Buying Triggers for ${company.companyName}:
 
@@ -435,6 +462,7 @@ Look for: ${t.what_to_look_for.join(', ')}`
   if (icp.marketResearch?.trim()) {
     ragDocuments.push({
       tenant_id: tenantId,
+      brand_id: brandId,
       rag_type: 'shared',
       content: `Market Research and Case Studies for ${company.companyName}:
 
