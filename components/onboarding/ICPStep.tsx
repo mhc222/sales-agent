@@ -224,12 +224,22 @@ export default function ICPStep({
 
   // Trigger research when component mounts if not already done
   useEffect(() => {
-    if (data.researchStatus === 'idle') {
+    console.log('[ICPStep] Mount - researchStatus:', data.researchStatus, 'websiteUrl:', websiteUrl, 'companyName:', companyName)
+    if (data.researchStatus === 'idle' && websiteUrl && companyName) {
+      console.log('[ICPStep] Starting research...')
       runResearch()
+    } else if (data.researchStatus === 'idle' && (!websiteUrl || !companyName)) {
+      console.error('[ICPStep] Missing websiteUrl or companyName, cannot start research')
+      onChange({
+        ...data,
+        researchStatus: 'error',
+        researchError: 'Missing company information. Please go back and fill in company name and website URL.',
+      })
     }
-  }, [])
+  }, [data.researchStatus, websiteUrl, companyName])
 
   async function runResearch() {
+    console.log('[ICPStep] runResearch called, websiteUrl:', websiteUrl, 'companyName:', companyName)
     onChange({ ...data, researchStatus: 'loading' })
     setResearchStageIndex(0)
 
@@ -237,15 +247,17 @@ export default function ICPStep({
       // Stage 1: Analyzing website
       setResearchStage('Analyzing website and identifying outcomes...')
 
+      console.log('[ICPStep] Calling research-icp API...')
       const response = await fetch('/api/onboarding/research-icp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ websiteUrl, companyName }),
       })
 
+      console.log('[ICPStep] Response status:', response.status)
       if (!response.ok) {
         const error = await response.json()
-        throw new Error(error.message || 'Research failed')
+        throw new Error(error.message || error.error || 'Research failed')
       }
 
       // Handle streaming response for progress updates
@@ -293,7 +305,26 @@ export default function ICPStep({
       // Parse final result (last line should be JSON)
       const lines = result.split('\n').filter((l) => l.trim())
       const lastLine = lines[lines.length - 1]
-      const researchResult = JSON.parse(lastLine)
+      console.log('[ICPStep] Parsing result, last line:', lastLine?.slice(0, 200))
+
+      let researchResult
+      try {
+        researchResult = JSON.parse(lastLine)
+      } catch (parseErr) {
+        console.error('[ICPStep] JSON parse error:', parseErr)
+        console.error('[ICPStep] Full result:', result)
+        throw new Error('Failed to parse research results')
+      }
+
+      console.log('[ICPStep] Research result:', {
+        hasAccountCriteria: !!researchResult.accountCriteria,
+        personaCount: researchResult.personas?.length,
+        triggerCount: researchResult.triggers?.length,
+      })
+
+      if (researchResult.error) {
+        throw new Error(researchResult.error)
+      }
 
       // Show success animation briefly
       setResearchStageIndex(RESEARCH_STAGES.length)
@@ -310,6 +341,7 @@ export default function ICPStep({
         researchStatus: 'complete',
       })
     } catch (err) {
+      console.error('[ICPStep] Research error:', err)
       onChange({
         ...data,
         researchStatus: 'error',
