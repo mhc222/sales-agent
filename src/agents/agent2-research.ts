@@ -6,19 +6,14 @@
  * Enhanced with multi-query research, pain detection, and intent scoring.
  */
 
-import Anthropic from '@anthropic-ai/sdk'
 import { supabase, type Lead } from '../lib/supabase'
 import type { WebSearchResult, PerplexityResearch } from '../lib/perplexity'
 import { researchCompany } from '../lib/perplexity'
 import { analyzeLinkedInPostsEnhanced, type EnhancedLinkedInAnalysis } from '../lib/linkedin-analyzer'
 import { scoreIntent, type EnhancedIntentScore, type IntentData } from '../lib/intent-scorer'
 import { loadPrompt } from '../lib/prompt-loader'
-import { getICPForLead, formatICPForPrompt } from '../lib/tenant-settings'
+import { getICPForLead, formatICPForPrompt, getTenantLLM } from '../lib/tenant-settings'
 import type { Brand, Campaign } from '../lib/brands'
-
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-})
 
 // Brand context for research
 export interface BrandContext {
@@ -237,21 +232,16 @@ export async function researchLead(
   // Build the research synthesis prompt (with fundamentals for intent signal guidance)
   const prompt = buildResearchPrompt(lead, rawData, personaDocs, icpDocs, sharedDocsWithBrand, intentSignalFundamentals)
 
-  // Call Claude for synthesis
-  const message = await anthropic.messages.create({
-    model: 'claude-sonnet-4-20250514',
-    max_tokens: 3000,
-    messages: [
-      {
-        role: 'user',
-        content: prompt,
-      },
-    ],
-  })
+  // Get tenant's configured LLM
+  const llm = await getTenantLLM(lead.tenant_id)
+
+  // Call LLM for synthesis
+  const response = await llm.chat([
+    { role: 'user', content: prompt },
+  ], { maxTokens: 3000 })
 
   // Parse response
-  const responseText =
-    message.content[0].type === 'text' ? message.content[0].text : ''
+  const responseText = response.content
 
   let result: ResearchResult
 

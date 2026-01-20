@@ -8,11 +8,7 @@
  * - Conversation hooks (engagement starters)
  */
 
-import Anthropic from '@anthropic-ai/sdk'
-
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-})
+import { getTenantLLM } from './tenant-settings'
 
 // ============================================================================
 // TYPES
@@ -95,6 +91,7 @@ export interface EnhancedLinkedInAnalysis {
  * Used by the waterfall research pattern to decide whether to continue gathering data
  */
 export async function analyzeLinkedInPosts(
+  tenantId: string,
   posts: unknown,
   personName: string,
   companyName: string,
@@ -172,15 +169,14 @@ Return JSON:
 Return ONLY valid JSON.`
 
   try {
-    const message = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 1500,
-      messages: [{ role: 'user', content: prompt }],
-    })
+    // Get tenant's configured LLM
+    const llm = await getTenantLLM(tenantId)
 
-    const responseText = message.content[0].type === 'text' ? message.content[0].text : ''
+    const response = await llm.chat([
+      { role: 'user', content: prompt },
+    ], { maxTokens: 1500 })
 
-    let jsonText = responseText.trim()
+    let jsonText = response.content.trim()
     if (jsonText.startsWith('```')) {
       jsonText = jsonText.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '')
     }

@@ -4,6 +4,7 @@
  */
 
 import { createClient } from '@supabase/supabase-js'
+import type { LLMProvider } from './llm/types'
 
 // AudienceLab source configuration (up to 5 per tenant)
 export interface AudienceLabSource {
@@ -122,6 +123,13 @@ export interface TenantDataSourcesConfig {
   min_intent_score?: number
 }
 
+/** LLM (AI Model) configuration - user provides their own API keys */
+export interface TenantLLMConfig {
+  provider: LLMProvider
+  api_key: string
+  model?: string // Optional model override
+}
+
 /** Targeting preference for lead scoring/prioritization */
 export interface TargetingPreference {
   field: string
@@ -134,6 +142,8 @@ export interface TargetingPreference {
 export interface TenantSettings {
   integrations?: TenantIntegrations
   data_sources?: TenantDataSourcesConfig
+  // LLM configuration (AI provider)
+  llm?: TenantLLMConfig
   // Active providers (selected during onboarding)
   email_provider?: 'smartlead' | 'nureply' | 'instantly' | string
   linkedin_provider?: 'heyreach' | string
@@ -393,4 +403,62 @@ export function formatICPForPrompt(icp: TenantICP): string {
   }
 
   return sections.join('\n\n') || 'No ICP criteria defined'
+}
+
+// =============================================================================
+// LLM Client Helpers
+// =============================================================================
+
+import { createLLMClient, type LLMClient } from './llm'
+
+/**
+ * Get an LLM client for a tenant
+ * Uses the tenant's configured LLM provider and API key
+ */
+export async function getTenantLLM(tenantId: string): Promise<LLMClient> {
+  const tenant = await getTenantSettings(tenantId)
+
+  if (!tenant?.settings?.llm) {
+    throw new Error(`Tenant ${tenantId} has no LLM configuration. Please complete onboarding to set up your AI provider.`)
+  }
+
+  const { provider, api_key, model } = tenant.settings.llm
+
+  if (!provider || !api_key) {
+    throw new Error(`Tenant ${tenantId} has incomplete LLM configuration. Please set up your AI provider in settings.`)
+  }
+
+  return createLLMClient({
+    provider,
+    apiKey: api_key,
+    model,
+  })
+}
+
+/**
+ * Get an LLM client for a brand (falls back to tenant)
+ * Checks brand settings first, then tenant settings
+ */
+export async function getLLMForBrand(tenantId: string, brandId?: string): Promise<LLMClient> {
+  const supabase = getServiceClient()
+
+  // 1. Try brand-specific LLM config first
+  if (brandId) {
+    const { data: brand, error: brandError } = await supabase
+      .from('brands')
+      .select('settings')
+      .eq('id', brandId)
+      .single()
+
+    if (!brandError && brand?.settings?.llm) {
+      const { provider, api_key, model } = brand.settings.llm
+      if (provider && api_key) {
+        console.log(`[TenantSettings] Using brand-specific LLM config for brand ${brandId}`)
+        return createLLMClient({ provider, apiKey: api_key, model })
+      }
+    }
+  }
+
+  // 2. Fall back to tenant LLM config
+  return getTenantLLM(tenantId)
 }

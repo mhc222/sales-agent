@@ -3,7 +3,6 @@
  * Takes research output and generates a 7-email TIPS sequence
  */
 
-import Anthropic from '@anthropic-ai/sdk'
 import { supabase, type Lead } from '../lib/supabase'
 import type { ResearchResult, RelationshipType } from './agent2-research'
 import { loadPrompt } from '../lib/prompt-loader'
@@ -12,12 +11,8 @@ import { getLearnedGuidelines } from '../lib/pattern-promoter'
 import { loadDynamicPrompt, recordPromptUsage, type PromptContext } from '../lib/prompt-manager'
 import { loadCorrections, type CorrectionsContext } from '../lib/corrections-loader'
 import { getGlobalGuidelines } from '../lib/correction-analyzer'
-import { getICPForLead, formatICPForPrompt } from '../lib/tenant-settings'
+import { getICPForLead, formatICPForPrompt, getTenantLLM } from '../lib/tenant-settings'
 import type { Brand, Campaign } from '../lib/brands'
-
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-})
 
 // Brand context for email sequence generation
 export interface BrandContext {
@@ -167,25 +162,16 @@ export async function writeSequence(input: WriterInput): Promise<EmailSequence> 
   // Build the writer prompt
   const prompt = buildWriterPrompt(lead, research, valueProps, caseStudies, personaContent)
 
-  // Call Claude with extended thinking for better reasoning
-  const message = await anthropic.messages.create({
-    model: 'claude-sonnet-4-20250514',
-    max_tokens: 16000,
-    thinking: {
-      type: 'enabled',
-      budget_tokens: 8000,
-    },
-    messages: [
-      {
-        role: 'user',
-        content: prompt,
-      },
-    ],
-  })
+  // Get tenant's configured LLM
+  const llm = await getTenantLLM(lead.tenant_id)
 
-  // Parse response - filter out thinking blocks to get the text response
-  const textBlock = message.content.find(block => block.type === 'text')
-  const responseText = textBlock?.type === 'text' ? textBlock.text : ''
+  // Call LLM with extended thinking for better reasoning (Anthropic-only, ignored by others)
+  const response = await llm.chat([
+    { role: 'user', content: prompt },
+  ], { maxTokens: 16000, thinkingBudget: 8000 })
+
+  // Parse response
+  const responseText = response.content
 
   let result: EmailSequence
 
@@ -395,25 +381,16 @@ export async function writeSequenceWithProfile(input: ProfileWriterInput): Promi
   )
   console.log(`[Agent 3] Using prompt version: ${promptVersionId}${abTestId ? ` (A/B test: ${abTestId})` : ''}`)
 
-  // Call Claude with extended thinking for better reasoning
-  const message = await anthropic.messages.create({
-    model: 'claude-sonnet-4-20250514',
-    max_tokens: 16000,
-    thinking: {
-      type: 'enabled',
-      budget_tokens: 10000, // Increased for quality self-checking
-    },
-    messages: [
-      {
-        role: 'user',
-        content: prompt,
-      },
-    ],
-  })
+  // Get tenant's configured LLM
+  const llm = await getTenantLLM(lead.tenant_id)
 
-  // Parse response - filter out thinking blocks to get the text response
-  const textBlock = message.content.find(block => block.type === 'text')
-  const responseText = textBlock?.type === 'text' ? textBlock.text : ''
+  // Call LLM with extended thinking for better reasoning (Anthropic-only, ignored by others)
+  const response = await llm.chat([
+    { role: 'user', content: prompt },
+  ], { maxTokens: 16000, thinkingBudget: 10000 })
+
+  // Parse response
+  const responseText = response.content
 
   let parsed: NewFormatResponse
   let result: EmailSequence
@@ -579,25 +556,16 @@ export async function writeSequenceWithRevisions(input: RevisionWriterInput): Pr
     learnedPatterns
   )
 
-  // Call Claude with extended thinking
-  const message = await anthropic.messages.create({
-    model: 'claude-sonnet-4-20250514',
-    max_tokens: 16000,
-    thinking: {
-      type: 'enabled',
-      budget_tokens: 12000, // Extra thinking budget for revisions
-    },
-    messages: [
-      {
-        role: 'user',
-        content: prompt,
-      },
-    ],
-  })
+  // Get tenant's configured LLM
+  const llm = await getTenantLLM(lead.tenant_id)
+
+  // Call LLM with extended thinking (extra budget for revisions, Anthropic-only)
+  const response = await llm.chat([
+    { role: 'user', content: prompt },
+  ], { maxTokens: 16000, thinkingBudget: 12000 })
 
   // Parse response
-  const textBlock = message.content.find(block => block.type === 'text')
-  const responseText = textBlock?.type === 'text' ? textBlock.text : ''
+  const responseText = response.content
 
   let parsed: NewFormatResponse
   let result: EmailSequence

@@ -1,14 +1,9 @@
-import Anthropic from '@anthropic-ai/sdk'
+import { createLLMClient, type LLMProvider } from '@/src/lib/llm'
 import type {
   AccountCriteria,
   ICPPersona,
   ICPTrigger,
-  ICPPriority,
 } from '@/src/lib/tenant-settings'
-
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-})
 
 // Helper to stream progress updates
 function createStreamResponse() {
@@ -72,26 +67,6 @@ async function fetchWebsiteContent(url: string): Promise<string> {
   }
 }
 
-// Run a prompt and get response
-async function runPrompt(
-  systemPrompt: string,
-  userPrompt: string
-): Promise<string> {
-  const response = await anthropic.messages.create({
-    model: 'claude-sonnet-4-20250514',
-    max_tokens: 4096,
-    system: systemPrompt,
-    messages: [{ role: 'user', content: userPrompt }],
-  })
-
-  const textContent = response.content.find((block) => block.type === 'text')
-  if (!textContent || textContent.type !== 'text') {
-    throw new Error('No text response from Claude')
-  }
-
-  return textContent.text
-}
-
 // Extract JSON from response (handles markdown code blocks)
 function extractJSON<T>(text: string): T {
   // Try to find JSON in code blocks first
@@ -111,7 +86,7 @@ function extractJSON<T>(text: string): T {
 
 export async function POST(request: Request) {
   const body = await request.json()
-  const { websiteUrl, companyName } = body
+  const { websiteUrl, companyName, llmConfig } = body
 
   if (!websiteUrl || !companyName) {
     return new Response(
@@ -120,7 +95,31 @@ export async function POST(request: Request) {
     )
   }
 
+  // LLM config is required - passed from onboarding flow
+  if (!llmConfig?.provider || !llmConfig?.apiKey) {
+    return new Response(
+      JSON.stringify({ error: 'LLM configuration is required. Please set up your AI provider first.' }),
+      { status: 400, headers: { 'Content-Type': 'application/json' } }
+    )
+  }
+
+  // Create LLM client from provided config
+  const llm = createLLMClient({
+    provider: llmConfig.provider as LLMProvider,
+    apiKey: llmConfig.apiKey,
+    model: llmConfig.model,
+  })
+
   const { stream, sendStage, sendResult, sendError } = createStreamResponse()
+
+  // Run a prompt and get response using the tenant's LLM
+  async function runPrompt(systemPrompt: string, userPrompt: string): Promise<string> {
+    const response = await llm.chat([
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userPrompt },
+    ])
+    return response.content
+  }
 
   // Run research pipeline in background
   ;(async () => {

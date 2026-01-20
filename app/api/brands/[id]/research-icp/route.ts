@@ -3,18 +3,15 @@
  * Runs ICP research for a specific brand and saves results to the brands table
  */
 
-import Anthropic from '@anthropic-ai/sdk'
 import { createClient } from '@supabase/supabase-js'
+import { getTenantLLM } from '@/src/lib/tenant-settings'
 import type {
   AccountCriteria,
   ICPPersona,
   ICPTrigger,
   TenantICP,
 } from '@/src/lib/tenant-settings'
-
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-})
+import type { LLMClient } from '@/src/lib/llm'
 
 const supabase = createClient(
   process.env.SUPABASE_URL!,
@@ -79,21 +76,14 @@ async function fetchWebsiteContent(url: string): Promise<string> {
   }
 }
 
-// Run a prompt and get response
-async function runPrompt(systemPrompt: string, userPrompt: string): Promise<string> {
-  const response = await anthropic.messages.create({
-    model: 'claude-sonnet-4-20250514',
-    max_tokens: 4096,
-    system: systemPrompt,
-    messages: [{ role: 'user', content: userPrompt }],
-  })
+// Run a prompt and get response using the tenant's configured LLM
+async function runPrompt(llm: LLMClient, systemPrompt: string, userPrompt: string): Promise<string> {
+  const response = await llm.chat([
+    { role: 'system', content: systemPrompt },
+    { role: 'user', content: userPrompt },
+  ], { maxTokens: 4096 })
 
-  const textContent = response.content.find((block) => block.type === 'text')
-  if (!textContent || textContent.type !== 'text') {
-    throw new Error('No text response from Claude')
-  }
-
-  return textContent.text
+  return response.content
 }
 
 // Extract JSON from response
@@ -140,6 +130,17 @@ export async function POST(
     )
   }
 
+  // Get tenant's configured LLM
+  let llm: LLMClient
+  try {
+    llm = await getTenantLLM(brand.tenant_id)
+  } catch {
+    return new Response(
+      JSON.stringify({ error: 'LLM not configured for this tenant. Please set up an AI provider in settings.' }),
+      { status: 400, headers: { 'Content-Type': 'application/json' } }
+    )
+  }
+
   const brandName = productName || brand.name
   const { stream, sendStage, sendResult, sendError } = createStreamResponse()
 
@@ -153,6 +154,7 @@ export async function POST(
       // Step 2: Analyze outcomes and departments (COMBINED to reduce LLM calls)
       sendStage('Analyzing brand outcomes and target departments...')
       const analysisResult = await runPrompt(
+        llm,
         `You are an expert B2B sales strategist analyzing a company's website to understand their value proposition and ideal customer profile.`,
         `Analyze this website content from ${brandName} (${websiteUrl}):
 
@@ -183,6 +185,7 @@ Format your response as JSON:
       const departments = analysisData.targetDepartments.slice(0, 5).map((d) => d.name).join(', ')
 
       const deptResearchResult = await runPrompt(
+        llm,
         `You are an expert B2B sales researcher with deep knowledge of organizational roles, KPIs, and pain points.`,
         `For ${brandName} which provides: ${analysisData.outcomes.map((o) => o.name).join(', ')}
 
@@ -219,6 +222,7 @@ For each department, provide detailed research in this JSON format:
       // Step 4: Generate Account Criteria
       sendStage('Building account criteria profile...')
       const accountCriteriaResult = await runPrompt(
+        llm,
         `You are an expert at defining Ideal Customer Profiles (ICP) for B2B sales.`,
         `Based on this research for ${brandName}:
 
@@ -243,6 +247,7 @@ Generate detailed account criteria in this JSON format. Each array should have 3
       // Step 5: Generate Personas
       sendStage('Creating target personas...')
       const personasResult = await runPrompt(
+        llm,
         `You are an expert at creating buyer personas using the Jobs-To-Be-Done framework.`,
         `Based on this research for ${brandName}:
 
@@ -269,6 +274,7 @@ Create exactly 5 target personas in this JSON format:
       // Step 6: Generate Smart Triggers
       sendStage('Identifying buying triggers and signals...')
       const triggersResult = await runPrompt(
+        llm,
         `You are an expert at identifying buying signals and triggers for B2B sales.`,
         `Based on this research for ${brandName}:
 

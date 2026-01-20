@@ -4,15 +4,11 @@
  * Catches issues Agent 3 might miss and ensures quality standards
  */
 
-import Anthropic from '@anthropic-ai/sdk'
 import { loadPrompt } from '../lib/prompt-loader'
 import { supabase } from '../lib/supabase'
+import { getTenantLLM } from '../lib/tenant-settings'
 import type { ContextProfile } from './context-profile-builder'
 import type { EmailSequence } from './agent3-writer'
-
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-})
 
 // ============================================================================
 // Types
@@ -79,23 +75,18 @@ export async function reviewEmailSequence(input: ReviewInput): Promise<ReviewRes
     messagingRag: messagingRag || 'No specific messaging guidelines available.',
   })
 
-  // Call Claude for review
-  const response = await anthropic.messages.create({
-    model: 'claude-sonnet-4-20250514',
-    max_tokens: 4096,
-    messages: [{ role: 'user', content: prompt }],
-  })
+  // Get tenant's configured LLM
+  const llm = await getTenantLLM(tenantId)
 
-  const content = response.content[0]
-  if (content.type !== 'text') {
-    console.error('[Agent 4] Unexpected response type from reviewer')
-    return createErrorResult('Unexpected response type from reviewer')
-  }
+  // Call LLM for review
+  const response = await llm.chat([
+    { role: 'user', content: prompt },
+  ], { maxTokens: 4096 })
 
   // Parse the review result
   try {
     // Strip markdown code blocks if present
-    let jsonText = content.text.trim()
+    let jsonText = response.content.trim()
     if (jsonText.startsWith('```')) {
       jsonText = jsonText.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '')
     }
@@ -110,9 +101,9 @@ export async function reviewEmailSequence(input: ReviewInput): Promise<ReviewRes
     return validatedResult
   } catch (e) {
     console.error('[Agent 4] Failed to parse review response:', e)
-    console.error('[Agent 4] Response snippet:', content.text.substring(0, 500))
+    console.error('[Agent 4] Response snippet:', response.content.substring(0, 500))
 
-    return createErrorResult(`Parser error: ${e}. Raw response: ${content.text.substring(0, 500)}`)
+    return createErrorResult(`Parser error: ${e}. Raw response: ${response.content.substring(0, 500)}`)
   }
 }
 

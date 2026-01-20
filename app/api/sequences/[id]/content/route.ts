@@ -1,15 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
-import Anthropic from '@anthropic-ai/sdk'
+import { getTenantLLM } from '@/src/lib/tenant-settings'
 
 const supabase = createClient(
   process.env.SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
-
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-})
 
 interface Email {
   subject: string
@@ -36,9 +32,10 @@ interface DetectedCorrection {
 }
 
 /**
- * Use Claude to detect meaningful corrections from edit diffs
+ * Use LLM to detect meaningful corrections from edit diffs
  */
 async function detectCorrectionsFromDiff(
+  tenantId: string,
   originalText: string,
   editedText: string,
   companyName: string
@@ -86,16 +83,15 @@ Return JSON array. If no meaningful corrections, return empty array: []
 \`\`\``
 
   try {
-    const message = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 2000,
-      messages: [{ role: 'user', content: prompt }],
-    })
+    // Get tenant's configured LLM
+    const llm = await getTenantLLM(tenantId)
 
-    const responseText = message.content[0].type === 'text' ? message.content[0].text : ''
+    const response = await llm.chat([
+      { role: 'user', content: prompt },
+    ], { maxTokens: 2000 })
 
     // Parse JSON
-    let jsonText = responseText.trim()
+    let jsonText = response.content.trim()
     const jsonMatch = jsonText.match(/```json\n?([\s\S]*?)\n?```/)
     if (jsonMatch) {
       jsonText = jsonMatch[1]
@@ -230,6 +226,7 @@ export async function PUT(
 
         if (originalText !== editedText) {
           const corrections = await detectCorrectionsFromDiff(
+            sequence.tenant_id,
             originalText,
             editedText,
             lead.company_name
@@ -245,6 +242,7 @@ export async function PUT(
 
         if (originalText !== editedText) {
           const corrections = await detectCorrectionsFromDiff(
+            sequence.tenant_id,
             originalText,
             editedText,
             lead.company_name

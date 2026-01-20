@@ -1,13 +1,8 @@
-import Anthropic from '@anthropic-ai/sdk'
 import { supabase, type Lead, type GHLRecord } from '../lib/supabase'
 import { loadPrompt } from '../lib/prompt-loader'
 import type { NormalizedLead, IntentSignals } from '../lib/data-normalizer'
-import { getICPForLead, formatICPForPrompt } from '../lib/tenant-settings'
+import { getICPForLead, formatICPForPrompt, getTenantLLM } from '../lib/tenant-settings'
 import type { Brand, Campaign } from '../lib/brands'
-
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-})
 
 type QualificationDecision = 'YES' | 'NO' | 'REVIEW'
 
@@ -185,21 +180,16 @@ export async function qualifyNormalizedLead(
     existingRelationshipCheck: existingRelationshipParts.join('\n'),
   })
 
-  // Call Claude
-  const message = await anthropic.messages.create({
-    model: 'claude-sonnet-4-20250514',
-    max_tokens: 500,
-    messages: [
-      {
-        role: 'user',
-        content: prompt,
-      },
-    ],
-  })
+  // Get tenant's configured LLM
+  const llm = await getTenantLLM(normalized.tenantId)
+
+  // Call LLM for qualification
+  const response = await llm.chat([
+    { role: 'user', content: prompt },
+  ], { maxTokens: 500 })
 
   // Parse response
-  const responseText =
-    message.content[0].type === 'text' ? message.content[0].text : ''
+  const responseText = response.content
 
   let result: QualificationResult
 
@@ -215,7 +205,7 @@ export async function qualifyNormalizedLead(
     // Fallback to REVIEW if parsing fails
     result = {
       decision: 'REVIEW',
-      reasoning: 'Claude response parsing failed - manual review recommended',
+      reasoning: 'LLM response parsing failed - manual review recommended',
       confidence: 0.5,
       ghl_status: 'new',
       icp_fit: 'medium',
@@ -319,21 +309,16 @@ export async function qualifyLead(
     existingRelationshipCheck: existingRelationshipParts.join('\n'),
   })
 
-  // Call Claude
-  const message = await anthropic.messages.create({
-    model: 'claude-sonnet-4-20250514',
-    max_tokens: 500,
-    messages: [
-      {
-        role: 'user',
-        content: prompt,
-      },
-    ],
-  })
+  // Get tenant's configured LLM
+  const llm = await getTenantLLM(lead.tenant_id)
+
+  // Call LLM for qualification
+  const response = await llm.chat([
+    { role: 'user', content: prompt },
+  ], { maxTokens: 500 })
 
   // Parse response
-  const responseText =
-    message.content[0].type === 'text' ? message.content[0].text : ''
+  const responseText = response.content
 
   let result: QualificationResult
 
@@ -349,7 +334,7 @@ export async function qualifyLead(
     // Fallback to REVIEW if parsing fails
     result = {
       decision: 'REVIEW',
-      reasoning: 'Claude response parsing failed - manual review recommended',
+      reasoning: 'LLM response parsing failed - manual review recommended',
       confidence: 0.5,
       ghl_status: 'new',
       icp_fit: 'medium',

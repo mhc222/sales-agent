@@ -3,13 +3,9 @@
  * Synthesizes research data into a unified context profile for personalized outreach
  */
 
-import Anthropic from '@anthropic-ai/sdk'
 import { loadPrompt } from '../lib/prompt-loader'
+import { getTenantLLM } from '../lib/tenant-settings'
 import type { NormalizedLead } from '../lib/data-normalizer'
-
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-})
 
 // ============================================================================
 // Types
@@ -326,23 +322,19 @@ export async function buildContextProfile(
     jsbContext: ragContext,
   })
 
-  // Call Claude
+  // Get tenant's configured LLM
+  const llm = await getTenantLLM(lead.tenantId)
+
+  // Call LLM
   let responseText = ''
   try {
-    const message = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 4000,
-      messages: [
-        {
-          role: 'user',
-          content: prompt,
-        },
-      ],
-    })
+    const response = await llm.chat([
+      { role: 'user', content: prompt },
+    ], { maxTokens: 4000 })
 
-    responseText = message.content[0].type === 'text' ? message.content[0].text : ''
+    responseText = response.content
   } catch (error) {
-    console.error('[Context Profile] Claude API error:', error)
+    console.error('[Context Profile] LLM API error:', error)
     console.log('[Context Profile] Returning minimal profile due to API error')
     return createMinimalProfile(lead, researchRecord)
   }
@@ -406,28 +398,16 @@ export async function buildContextProfile(
 
     // Retry once
     try {
-      const retryMessage = await anthropic.messages.create({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 4000,
-        messages: [
-          {
-            role: 'user',
-            content: prompt,
-          },
-          {
-            role: 'assistant',
-            content: responseText,
-          },
-          {
-            role: 'user',
-            content:
-              'Your response was not valid JSON. Please return ONLY a valid JSON object matching the ContextProfile schema, with no markdown formatting or additional text.',
-          },
-        ],
-      })
+      const retryResponse = await llm.chat([
+        { role: 'user', content: prompt },
+        { role: 'assistant', content: responseText },
+        {
+          role: 'user',
+          content: 'Your response was not valid JSON. Please return ONLY a valid JSON object matching the ContextProfile schema, with no markdown formatting or additional text.',
+        },
+      ], { maxTokens: 4000 })
 
-      const retryText =
-        retryMessage.content[0].type === 'text' ? retryMessage.content[0].text : ''
+      const retryText = retryResponse.content
       const profile = parseContextProfile(retryText, lead)
       const enrichedProfile = mergeEnhancedData(profile)
       console.log(`[Context Profile] Profile built on retry - Quality score: ${enrichedProfile.metadata.dataQualityScore}`)

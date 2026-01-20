@@ -3,17 +3,12 @@
  * Takes research output and generates a 4-message LinkedIn DM sequence
  */
 
-import Anthropic from '@anthropic-ai/sdk'
 import { supabase, type Lead } from '../lib/supabase'
 import type { ResearchResult } from './agent2-research'
 import { loadPrompt } from '../lib/prompt-loader'
 import type { ContextProfile } from './context-profile-builder'
-import { getICPForLead, formatICPForPrompt } from '../lib/tenant-settings'
+import { getICPForLead, formatICPForPrompt, getTenantLLM } from '../lib/tenant-settings'
 import type { Brand, Campaign } from '../lib/brands'
-
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-})
 
 // Brand context for LinkedIn sequence generation
 export interface BrandContext {
@@ -181,25 +176,16 @@ export async function writeLinkedInSequence(input: LinkedInWriterInput): Promise
     learnedPatterns
   )
 
-  // Call Claude with extended thinking for better reasoning
-  const message = await anthropic.messages.create({
-    model: 'claude-sonnet-4-20250514',
-    max_tokens: 8000,
-    thinking: {
-      type: 'enabled',
-      budget_tokens: 6000,
-    },
-    messages: [
-      {
-        role: 'user',
-        content: prompt,
-      },
-    ],
-  })
+  // Get tenant's configured LLM
+  const llm = await getTenantLLM(lead.tenant_id)
+
+  // Call LLM with extended thinking for better reasoning (Anthropic-only, ignored by others)
+  const response = await llm.chat([
+    { role: 'user', content: prompt },
+  ], { maxTokens: 8000, thinkingBudget: 6000 })
 
   // Parse response
-  const textBlock = message.content.find(block => block.type === 'text')
-  const responseText = textBlock?.type === 'text' ? textBlock.text : ''
+  const responseText = response.content
 
   let parsed: NewFormatResponse
   let result: LinkedInSequence

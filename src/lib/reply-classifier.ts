@@ -1,13 +1,9 @@
 /**
  * Reply Classifier
- * Uses Claude to classify email replies into categories
+ * Uses the tenant's configured LLM to classify email replies into categories
  */
 
-import Anthropic from '@anthropic-ai/sdk'
-
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-})
+import { getTenantLLM } from './tenant-settings'
 
 export type ReplyCategory =
   | 'interested'
@@ -30,6 +26,7 @@ export interface ClassificationResult {
 }
 
 interface ClassifyInput {
+  tenantId: string
   reply_text: string
   reply_subject?: string
   lead_name?: string
@@ -40,7 +37,7 @@ interface ClassifyInput {
  * Classify an email reply into actionable categories
  */
 export async function classifyReply(input: ClassifyInput): Promise<ClassificationResult> {
-  const { reply_text, reply_subject, lead_name, company_name } = input
+  const { tenantId, reply_text, reply_subject, lead_name, company_name } = input
 
   const prompt = `You are classifying an email reply to a cold outreach email. Analyze the reply and categorize it.
 
@@ -80,22 +77,16 @@ Return JSON only:
   "follow_up_suggestion": "suggestion or null (only for not_interested_now)"
 }`
 
-  const message = await anthropic.messages.create({
-    model: 'claude-sonnet-4-20250514',
-    max_tokens: 1000,
-    messages: [
-      {
-        role: 'user',
-        content: prompt,
-      },
-    ],
-  })
+  // Get tenant's configured LLM
+  const llm = await getTenantLLM(tenantId)
 
-  const responseText = message.content[0].type === 'text' ? message.content[0].text : ''
+  const response = await llm.chat([
+    { role: 'user', content: prompt },
+  ], { maxTokens: 1000 })
 
   try {
     // Parse JSON response
-    let jsonText = responseText.trim()
+    let jsonText = response.content.trim()
     if (jsonText.startsWith('```')) {
       jsonText = jsonText.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '')
     }
@@ -112,7 +103,7 @@ Return JSON only:
       follow_up_suggestion: parsed.follow_up_suggestion || undefined,
     }
   } catch (error) {
-    console.error('[Reply Classifier] Failed to parse response:', responseText)
+    console.error('[Reply Classifier] Failed to parse response:', response.content)
 
     // Fallback classification based on keywords
     return fallbackClassification(reply_text)
@@ -120,7 +111,7 @@ Return JSON only:
 }
 
 /**
- * Simple keyword-based fallback if Claude parsing fails
+ * Simple keyword-based fallback if LLM parsing fails
  */
 function fallbackClassification(text: string): ClassificationResult {
   const lowerText = text.toLowerCase()

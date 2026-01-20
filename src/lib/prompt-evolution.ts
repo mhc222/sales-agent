@@ -5,8 +5,8 @@
  * Creates A/B tests to validate improvements before full deployment.
  */
 
-import Anthropic from '@anthropic-ai/sdk'
 import { supabase } from './supabase'
+import { getTenantLLM } from './tenant-settings'
 
 // ============================================================================
 // TYPES
@@ -113,9 +113,9 @@ async function evolvePrompt(tenantId: string, promptName: string): Promise<Evolu
 
   const deprecatedIds = deprecatedPatterns?.map((p) => p.id) || []
 
-  // 4. Generate new prompt version with Claude
+  // 4. Generate new prompt version using tenant's LLM
   const currentPrompt = (currentVersion?.full_prompt as string) || definition.base_prompt
-  const newPromptContent = await generateEvolvedPrompt(currentPrompt, patternsToInject, deprecatedIds)
+  const newPromptContent = await generateEvolvedPrompt(tenantId, currentPrompt, patternsToInject, deprecatedIds)
 
   // 5. Create new version
   const newVersionNumber = ((currentVersion?.version_number as number) || 0) + 1
@@ -197,9 +197,10 @@ async function evolvePrompt(tenantId: string, promptName: string): Promise<Evolu
 }
 
 /**
- * Generate evolved prompt using Claude
+ * Generate evolved prompt using tenant's LLM
  */
 async function generateEvolvedPrompt(
+  tenantId: string,
   currentPrompt: string,
   newPatterns: PatternToInject[],
   deprecatedPatternIds: string[]
@@ -212,7 +213,8 @@ async function generateEvolvedPrompt(
     .join('\n')
 
   try {
-    const anthropic = new Anthropic()
+    // Get tenant's configured LLM
+    const llm = await getTenantLLM(tenantId)
 
     const prompt = `You are updating an AI agent's prompt based on new performance data. Your job is to integrate new validated patterns into the prompt naturally.
 
@@ -237,19 +239,11 @@ ${patternsToAdd}
 
 Return ONLY the updated prompt text. No explanations, no markdown code blocks wrapping the entire response, just the prompt content.`
 
-    const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 12000,
-      messages: [{ role: 'user', content: prompt }],
-    })
+    const response = await llm.chat([
+      { role: 'user', content: prompt },
+    ], { maxTokens: 12000 })
 
-    const content = response.content[0]
-    if (content.type !== 'text') {
-      console.error('[PromptEvolution] Unexpected response type from Claude')
-      return currentPrompt // Fallback to current
-    }
-
-    return content.text
+    return response.content
   } catch (err) {
     console.error('[PromptEvolution] Error generating evolved prompt:', err)
     return currentPrompt // Fallback to current

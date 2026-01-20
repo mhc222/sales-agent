@@ -36,7 +36,7 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json()
-    const { company, icp, channels, emailProvider, apollo, audienceLab, linkedIn, crm, dnc, tenantId } = body
+    const { llm, company, icp, channels, emailProvider, apollo, audienceLab, linkedIn, crm, dnc, tenantId } = body
 
     // Use service client for admin operations (bypasses RLS)
     const serviceClient = createServiceClient()
@@ -89,6 +89,10 @@ export async function POST(request: Request) {
     }
 
     // Validate required fields
+    if (!llm?.provider || !llm?.apiKey) {
+      return NextResponse.json({ error: 'AI provider configuration is required' }, { status: 400 })
+    }
+
     if (!company?.companyName || !company?.yourName || !company?.websiteUrl) {
       return NextResponse.json({ error: 'Company information is required' }, { status: 400 })
     }
@@ -205,6 +209,12 @@ export async function POST(request: Request) {
 
     const settings = {
       integrations,
+      // LLM configuration
+      llm: {
+        provider: llm.provider,
+        api_key: llm.apiKey,
+        ...(llm.model && { model: llm.model }),
+      },
       // Active email provider (null if email not selected)
       email_provider: outreachChannels.includes('email') ? emailProvider?.provider : null,
       // Active linkedin provider (null if linkedin not selected)

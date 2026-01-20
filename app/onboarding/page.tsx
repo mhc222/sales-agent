@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { jsb, cn } from '@/lib/styles'
+import LLMProviderStep from '@/components/onboarding/LLMProviderStep'
 import CompanyStep from '@/components/onboarding/CompanyStep'
 import ICPStep from '@/components/onboarding/ICPStep'
 import ChannelsStep from '@/components/onboarding/ChannelsStep'
@@ -13,6 +14,8 @@ import LinkedInStep from '@/components/onboarding/LinkedInStep'
 import CRMStep from '@/components/onboarding/CRMStep'
 import DNCStep from '@/components/onboarding/DNCStep'
 
+import type { LLMProvider } from '@/src/lib/llm/types'
+
 import type {
   AccountCriteria,
   ICPPersona,
@@ -21,6 +24,11 @@ import type {
 
 
 type OnboardingData = {
+  llm: {
+    provider: LLMProvider | ''
+    apiKey: string
+    model?: string
+  }
   company: {
     companyName: string
     yourName: string
@@ -84,8 +92,9 @@ type OnboardingData = {
 // Steps are dynamically computed based on channel selections
 const getSteps = (channels: OnboardingData['channels']) => {
   const baseSteps = [
+    { id: 'llm', title: 'AI Provider' },
     { id: 'company', title: 'Company' },
-    { id: 'icp', title: 'ICP & Messaging' },
+    { id: 'icp', title: 'ICP' },
     { id: 'channels', title: 'Channels' },
   ]
 
@@ -123,6 +132,7 @@ const getSteps = (channels: OnboardingData['channels']) => {
 }
 
 const defaultData: OnboardingData = {
+  llm: { provider: '', apiKey: '' },
   company: { companyName: '', yourName: '', websiteUrl: '' },
   icp: {
     accountCriteria: null,
@@ -258,11 +268,21 @@ export default function OnboardingPage() {
 
       {/* Step Content */}
       <div className={cn(jsb.card, 'p-8')}>
+        {currentStepId === 'llm' && (
+          <LLMProviderStep
+            data={data.llm}
+            onChange={(llm) => updateData({ llm })}
+            onNext={goNext}
+            onBack={goBack}
+          />
+        )}
+
         {currentStepId === 'company' && (
           <CompanyStep
             data={data.company}
             onChange={(company) => updateData({ company })}
             onNext={goNext}
+            onBack={goBack}
           />
         )}
 
@@ -271,6 +291,7 @@ export default function OnboardingPage() {
             data={data.icp}
             websiteUrl={data.company.websiteUrl}
             companyName={data.company.companyName}
+            llmConfig={data.llm}
             onChange={(icp) => updateData({ icp })}
             onNext={goNext}
             onBack={goBack}

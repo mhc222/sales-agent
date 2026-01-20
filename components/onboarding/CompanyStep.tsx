@@ -12,6 +12,7 @@ type Props = {
   data: CompanyData
   onChange: (data: CompanyData) => void
   onNext: () => void
+  onBack: () => void
 }
 
 // Simple URL validation - accepts with or without protocol
@@ -27,7 +28,7 @@ function isValidUrl(url: string): boolean {
   }
 }
 
-export default function CompanyStep({ data, onChange, onNext }: Props) {
+export default function CompanyStep({ data, onChange, onNext, onBack }: Props) {
   const isValid =
     data.companyName.trim() &&
     data.yourName.trim() &&
@@ -89,11 +90,14 @@ export default function CompanyStep({ data, onChange, onNext }: Props) {
         </div>
       </div>
 
-      <div className="pt-4">
+      <div className="flex gap-3 pt-4">
+        <button onClick={onBack} className={cn(jsb.buttonSecondary, 'px-6 py-3')}>
+          Back
+        </button>
         <button
           onClick={onNext}
           disabled={!isValid}
-          className={cn(jsb.buttonPrimary, 'w-full py-3')}
+          className={cn(jsb.buttonPrimary, 'flex-1 py-3')}
         >
           Continue
         </button>

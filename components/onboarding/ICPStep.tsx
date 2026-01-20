@@ -8,6 +8,7 @@ import type {
   ICPTrigger,
   ICPPriority,
 } from '@/src/lib/tenant-settings'
+import type { LLMProvider } from '@/src/lib/llm/types'
 
 type ICPChange = {
   category: string
@@ -26,10 +27,17 @@ type ICPData = {
   changes?: ICPChange[]
 }
 
+type LLMConfig = {
+  provider: LLMProvider | ''
+  apiKey: string
+  model?: string
+}
+
 type Props = {
   data: ICPData
   websiteUrl: string
   companyName: string
+  llmConfig: LLMConfig
   onChange: (data: ICPData) => void
   onNext: () => void
   onBack: () => void
@@ -210,6 +218,7 @@ export default function ICPStep({
   data,
   websiteUrl,
   companyName,
+  llmConfig,
   onChange,
   onNext,
   onBack,
@@ -251,7 +260,7 @@ export default function ICPStep({
       const response = await fetch('/api/onboarding/research-icp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ websiteUrl, companyName }),
+        body: JSON.stringify({ websiteUrl, companyName, llmConfig }),
       })
 
       console.log('[ICPStep] Response status:', response.status)
@@ -368,6 +377,7 @@ export default function ICPStep({
             personas: data.personas,
             triggers: data.triggers,
           },
+          llmConfig,
         }),
       })
 

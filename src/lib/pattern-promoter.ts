@@ -5,8 +5,8 @@
  * underperforming patterns.
  */
 
-import Anthropic from '@anthropic-ai/sdk'
 import { supabase } from './supabase'
+import { getTenantLLM } from './tenant-settings'
 
 // ============================================================================
 // TYPES
@@ -93,8 +93,8 @@ async function promotePattern(tenantId: string, pattern: Record<string, unknown>
   }
 
   try {
-    // 1. Generate RAG document content using Claude
-    const ragContent = await generateRagContent(pattern)
+    // 1. Generate RAG document content using tenant's LLM
+    const ragContent = await generateRagContent(tenantId, pattern)
     result.ragContent = ragContent
 
     // 2. Check if RAG document already exists for this pattern
@@ -186,13 +186,14 @@ async function promotePattern(tenantId: string, pattern: Record<string, unknown>
 }
 
 /**
- * Generate RAG content for a pattern using Claude
+ * Generate RAG content for a pattern using tenant's LLM
  */
-async function generateRagContent(pattern: Record<string, unknown>): Promise<string> {
+async function generateRagContent(tenantId: string, pattern: Record<string, unknown>): Promise<string> {
   const metrics = pattern.performance_metrics as Record<string, unknown> | null
 
   try {
-    const anthropic = new Anthropic()
+    // Get tenant's configured LLM
+    const llm = await getTenantLLM(tenantId)
 
     const prompt = `You are creating a RAG document entry for JSB Media's email writing system. Based on the following learned pattern, write a concise, actionable guideline that can be used by the email writing agent.
 
@@ -213,20 +214,13 @@ Write a RAG document entry that:
 
 Format as plain text, no headers, 3-5 sentences max. Be direct and actionable.`
 
-    const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 500,
-      messages: [{ role: 'user', content: prompt }],
-    })
+    const response = await llm.chat([
+      { role: 'user', content: prompt },
+    ], { maxTokens: 500 })
 
-    const content = response.content[0]
-    if (content.type !== 'text') {
-      return generateFallbackRagContent(pattern)
-    }
-
-    return content.text
+    return response.content
   } catch (err) {
-    console.error('[PatternPromoter] Error generating RAG content with Claude:', err)
+    console.error('[PatternPromoter] Error generating RAG content:', err)
     return generateFallbackRagContent(pattern)
   }
 }

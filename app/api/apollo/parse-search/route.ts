@@ -1,11 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/src/lib/supabase-server'
-import Anthropic from '@anthropic-ai/sdk'
+import { getTenantLLM } from '@/src/lib/tenant-settings'
 import { INDUSTRY_IDS } from '@/src/lib/apollo'
-
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-})
 
 interface ParsedSearchParams {
   jobTitles: string[]
@@ -38,6 +34,20 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Query is required' }, { status: 400 })
     }
 
+    // Get user's tenant
+    const { data: userTenant } = await supabase
+      .from('user_tenants')
+      .select('tenant_id')
+      .eq('user_id', user.id)
+      .single()
+
+    if (!userTenant) {
+      return NextResponse.json({ error: 'No tenant found' }, { status: 404 })
+    }
+
+    // Get tenant's configured LLM
+    const llm = await getTenantLLM(userTenant.tenant_id)
+
     // Generate structured search parameters from natural language
     const systemPrompt = `You are an expert at extracting Apollo.io search parameters from natural language queries.
 
@@ -62,35 +72,25 @@ You must respond with ONLY a valid JSON object in this exact format, no addition
   "reasoning": "brief explanation of how you interpreted the query"
 }`
 
-    const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 1024,
-      system: systemPrompt,
-      messages: [
-        {
-          role: 'user',
-          content: `Extract Apollo search parameters from this query: "${query}"`,
-        },
-      ],
-    })
-
-    // Extract the text content
-    const textContent = response.content.find((block) => block.type === 'text')
-    if (!textContent || textContent.type !== 'text') {
-      throw new Error('No text response from Claude')
-    }
+    const response = await llm.chat([
+      { role: 'system', content: systemPrompt },
+      {
+        role: 'user',
+        content: `Extract Apollo search parameters from this query: "${query}"`,
+      },
+    ], { maxTokens: 1024 })
 
     // Parse the JSON response
     let parsed: ParsedSearchParams
     try {
-      parsed = JSON.parse(textContent.text)
+      parsed = JSON.parse(response.content)
     } catch (parseError) {
       // Try to extract JSON from the response if it has extra text
-      const jsonMatch = textContent.text.match(/\{[\s\S]*\}/)
+      const jsonMatch = response.content.match(/\{[\s\S]*\}/)
       if (jsonMatch) {
         parsed = JSON.parse(jsonMatch[0])
       } else {
-        throw new Error('Failed to parse Claude response as JSON')
+        throw new Error('Failed to parse LLM response as JSON')
       }
     }
 

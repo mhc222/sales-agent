@@ -39,9 +39,10 @@ export const replyClassification = inngest.createFunction(
 
     console.log(`[Reply Handler] Classifying reply from: ${email}`)
 
-    // Step 1: Classify the reply using Claude
+    // Step 1: Classify the reply using tenant's LLM
     const classification = await step.run('classify-reply', async () => {
       return await classifyReply({
+        tenantId: tenant_id,
         reply_text,
         reply_subject,
         lead_name,
@@ -890,9 +891,10 @@ export const linkedinReplyClassification = inngest.createFunction(
 
     console.log(`[LinkedIn Reply Handler] Classifying reply from: ${linkedin_url}`)
 
-    // Step 1: Classify the reply using Claude (same classifier as email)
+    // Step 1: Classify the reply using tenant's LLM (same classifier as email)
     const classification = await step.run('classify-reply', async () => {
       return await classifyReply({
+        tenantId: tenant_id,
         reply_text: message,
         reply_subject: 'LinkedIn Message', // LinkedIn doesn't have subjects
         lead_name,

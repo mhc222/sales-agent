@@ -1,13 +1,9 @@
-import Anthropic from '@anthropic-ai/sdk'
+import { createLLMClient, type LLMProvider } from '@/src/lib/llm'
 import type {
   AccountCriteria,
   ICPPersona,
   ICPTrigger,
 } from '@/src/lib/tenant-settings'
-
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-})
 
 interface ReconcileRequest {
   companyName: string
@@ -16,6 +12,11 @@ interface ReconcileRequest {
     accountCriteria: AccountCriteria
     personas: ICPPersona[]
     triggers: ICPTrigger[]
+  }
+  llmConfig: {
+    provider: LLMProvider
+    apiKey: string
+    model?: string
   }
 }
 
@@ -76,7 +77,7 @@ function extractJSON<T>(text: string): T {
 
 export async function POST(request: Request) {
   const body: ReconcileRequest = await request.json()
-  const { companyName, marketResearch, currentICP } = body
+  const { companyName, marketResearch, currentICP, llmConfig } = body
 
   if (!marketResearch?.trim()) {
     return new Response(
@@ -92,7 +93,31 @@ export async function POST(request: Request) {
     )
   }
 
+  // LLM config is required - passed from onboarding flow
+  if (!llmConfig?.provider || !llmConfig?.apiKey) {
+    return new Response(
+      JSON.stringify({ error: 'LLM configuration is required. Please set up your AI provider first.' }),
+      { status: 400, headers: { 'Content-Type': 'application/json' } }
+    )
+  }
+
+  // Create LLM client from provided config
+  const llm = createLLMClient({
+    provider: llmConfig.provider,
+    apiKey: llmConfig.apiKey,
+    model: llmConfig.model,
+  })
+
   const { stream, sendStage, sendResult, sendError } = createStreamResponse()
+
+  // Run a prompt and get response using the tenant's LLM
+  async function runPrompt(systemPrompt: string, userPrompt: string): Promise<string> {
+    const response = await llm.chat([
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userPrompt },
+    ], { maxTokens: 8192 })
+    return response.content
+  }
 
   // Run reconciliation pipeline in background
   ;(async () => {
@@ -100,10 +125,8 @@ export async function POST(request: Request) {
       // Step 1: Parse and extract insights from market research
       sendStage('Parsing your market research and case studies...')
 
-      const parseResponse = await anthropic.messages.create({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 4096,
-        system: `You are an expert B2B sales analyst. Your job is to extract actionable insights from market research, case studies, and customer knowledge that a human has provided.
+      const parseText = await runPrompt(
+        `You are an expert B2B sales analyst. Your job is to extract actionable insights from market research, case studies, and customer knowledge that a human has provided.
 
 Be thorough - extract every piece of useful information including:
 - Specific customer types, industries, or company profiles mentioned
@@ -114,9 +137,7 @@ Be thorough - extract every piece of useful information including:
 - Objections, concerns, or hesitations
 - Competitive insights
 - Any specific language, phrases, or terminology used`,
-        messages: [{
-          role: 'user',
-          content: `Parse this market research and case study content from ${companyName}. Extract all insights that could inform our Ideal Customer Profile.
+        `Parse this market research and case study content from ${companyName}. Extract all insights that could inform our Ideal Customer Profile.
 
 MARKET RESEARCH CONTENT:
 ${marketResearch}
@@ -142,10 +163,8 @@ Return a JSON object with extracted insights:
   "keyPhrases": ["Important phrases or language to use"],
   "otherInsights": ["Any other relevant insights"]
 }`
-        }],
-      })
+      )
 
-      const parseText = parseResponse.content.find(block => block.type === 'text')?.text || ''
       const humanInsights = extractJSON<{
         customerProfiles: Array<{ description: string; source: string }>
         personas: Array<{ title: string; painPoints: string[]; goals: string[]; source: string }>
@@ -162,10 +181,8 @@ Return a JSON object with extracted insights:
       // Step 2: Compare and reconcile with current ICP
       sendStage('Comparing human knowledge with AI research...')
 
-      const reconcileResponse = await anthropic.messages.create({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 8192,
-        system: `You are an expert at reconciling AI-generated research with human knowledge.
+      const reconcileText = await runPrompt(
+        `You are an expert at reconciling AI-generated research with human knowledge.
 
 CRITICAL RULES:
 1. HUMAN KNOWLEDGE ALWAYS WINS - if the human's input contradicts AI research, prefer the human version
@@ -174,9 +191,7 @@ CRITICAL RULES:
 4. TRACK CHANGES - document every modification you make and why
 5. PRESERVE GOOD AI WORK - if AI research covers something human didn't mention, keep it
 6. ENHANCE WITH CONTEXT - use human case studies to make personas and triggers more specific`,
-        messages: [{
-          role: 'user',
-          content: `Reconcile this AI-generated ICP with human knowledge. The human knows their business better than AI - prefer their insights.
+        `Reconcile this AI-generated ICP with human knowledge. The human knows their business better than AI - prefer their insights.
 
 CURRENT AI-GENERATED ICP:
 ${JSON.stringify(currentICP, null, 2)}
@@ -231,10 +246,8 @@ Return JSON:
     }
   ]
 }`
-        }],
-      })
+      )
 
-      const reconcileText = reconcileResponse.content.find(block => block.type === 'text')?.text || ''
       const reconciled = extractJSON<ReconcileResponse>(reconcileText)
 
       // Step 3: Validate and finalize

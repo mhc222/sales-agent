@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/src/lib/supabase-server'
+import { validateLLMApiKey, type LLMProvider } from '@/src/lib/llm'
 
 export async function POST(request: Request) {
   try {
@@ -12,7 +13,7 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json()
-    const { provider, apiKey, apiUrl, locationId } = body
+    const { type, provider, apiKey, apiUrl, locationId } = body
 
     if (!provider) {
       return NextResponse.json(
@@ -24,6 +25,25 @@ export async function POST(request: Request) {
     // Test connection based on provider
     let success = false
     let message = ''
+
+    // Handle LLM providers specially
+    if (type === 'llm') {
+      if (!apiKey) {
+        return NextResponse.json({ success: false, error: 'API key is required' }, { status: 400 })
+      }
+      try {
+        success = await validateLLMApiKey(provider as LLMProvider, apiKey)
+        if (!success) {
+          message = 'Invalid API key or unable to connect'
+        }
+      } catch (err) {
+        message = err instanceof Error ? err.message : 'Failed to validate API key'
+      }
+      return NextResponse.json({
+        success,
+        error: success ? undefined : message || 'Connection failed',
+      })
+    }
 
     switch (provider) {
       case 'smartlead': {

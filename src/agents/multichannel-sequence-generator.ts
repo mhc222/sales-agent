@@ -3,7 +3,6 @@
  * Creates coordinated email + LinkedIn sequences based on campaign mode
  */
 
-import Anthropic from '@anthropic-ai/sdk'
 import { supabase } from '../lib/supabase'
 import type { Lead } from '../lib/supabase'
 import type { ContextProfile } from './context-profile-builder'
@@ -17,11 +16,7 @@ import type {
   SequenceStrategy,
   MultiChannelSequenceInput,
 } from '../lib/orchestration/types'
-import { getICPForLead, formatICPForPrompt } from '../lib/tenant-settings'
-
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-})
+import { getICPForLead, formatICPForPrompt, getTenantLLM } from '../lib/tenant-settings'
 
 // ============================================================================
 // TYPES
@@ -475,20 +470,16 @@ export async function generateMultiChannelSequence(
   // Build prompt
   const prompt = buildMultiChannelPrompt(input, fundamentals)
 
-  // Call Claude
-  const message = await anthropic.messages.create({
-    model: 'claude-sonnet-4-20250514',
-    max_tokens: 12000,
-    thinking: {
-      type: 'enabled',
-      budget_tokens: 8000,
-    },
-    messages: [{ role: 'user', content: prompt }],
-  })
+  // Get tenant's configured LLM
+  const llm = await getTenantLLM(lead.tenant_id)
+
+  // Call LLM with extended thinking for better reasoning (Anthropic-only, ignored by others)
+  const response = await llm.chat([
+    { role: 'user', content: prompt },
+  ], { maxTokens: 12000, thinkingBudget: 8000 })
 
   // Parse response
-  const textBlock = message.content.find(block => block.type === 'text')
-  const responseText = textBlock?.type === 'text' ? textBlock.text : ''
+  const responseText = response.content
 
   let generated: GeneratedSequence
   try {

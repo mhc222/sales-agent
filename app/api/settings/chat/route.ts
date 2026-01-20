@@ -1,11 +1,6 @@
 import { NextResponse } from 'next/server'
-import Anthropic from '@anthropic-ai/sdk'
 import { createClient, createServiceClient } from '@/src/lib/supabase-server'
-import { getTenantSettings } from '@/src/lib/tenant-settings'
-
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-})
+import { getTenantSettings, getTenantLLM } from '@/src/lib/tenant-settings'
 
 interface ChatMessage {
   role: 'user' | 'assistant'
@@ -109,11 +104,14 @@ export async function POST(request: Request) {
       data_sources: tenant.settings?.data_sources || {},
     }
 
+    // Get tenant's configured LLM
+    const llm = await getTenantLLM(tenantId)
+
     // First, understand what the user wants to do
-    const intentResponse = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 2048,
-      system: `You are an AI assistant helping configure a B2B sales outreach platform.
+    const intentResponse = await llm.chat([
+      {
+        role: 'system',
+        content: `You are an AI assistant helping configure a B2B sales outreach platform.
 
 ## WHAT YOU CAN HELP WITH:
 1. ICP (Ideal Customer Profile): personas, triggers, account criteria
@@ -211,16 +209,15 @@ For DNC:
 - dnc_entries: [{type: "domain", value: "nike.com"}, {type: "email", value: "john@example.com"}]
 
 Be conversational but efficient. Always validate against available data before accepting preferences.`,
-      messages: [
-        ...history.map((msg) => ({
-          role: msg.role as 'user' | 'assistant',
-          content: msg.content,
-        })),
-        { role: 'user' as const, content: message },
-      ],
-    })
+      },
+      ...history.map((msg) => ({
+        role: msg.role as 'user' | 'assistant',
+        content: msg.content,
+      })),
+      { role: 'user' as const, content: message },
+    ], { maxTokens: 2048 })
 
-    const responseText = intentResponse.content.find(block => block.type === 'text')?.text || ''
+    const responseText = intentResponse.content
 
     // Check if there's an action to perform
     const jsonMatch = responseText.match(/```json\s*([\s\S]*?)```/)

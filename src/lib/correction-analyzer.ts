@@ -4,16 +4,12 @@
  */
 
 import { createClient } from '@supabase/supabase-js'
-import Anthropic from '@anthropic-ai/sdk'
+import { getTenantLLM } from './tenant-settings'
 
 const supabase = createClient(
   process.env.SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
-
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-})
 
 interface CorrectionPattern {
   patternName: string
@@ -100,16 +96,15 @@ Return your analysis as a JSON array:
 If no clear patterns emerge, return an empty array: []`
 
   try {
-    const message = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 4000,
-      messages: [{ role: 'user', content: prompt }],
-    })
+    // Get tenant's configured LLM
+    const llm = await getTenantLLM(tenantId)
 
-    const responseText = message.content[0].type === 'text' ? message.content[0].text : ''
+    const response = await llm.chat([
+      { role: 'user', content: prompt },
+    ], { maxTokens: 4000 })
 
     // Parse JSON response
-    let jsonText = responseText.trim()
+    let jsonText = response.content.trim()
     const jsonMatch = jsonText.match(/```json\n?([\s\S]*?)\n?```/)
     if (jsonMatch) {
       jsonText = jsonMatch[1]
