@@ -5,20 +5,17 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { Shell } from '@/components/layout/Shell'
 import { jsb, cn } from '@/lib/styles'
-import DataSourceStep, { type DataSourceData } from '@/components/campaigns/wizard/DataSourceStep'
 import type { Brand } from '@/src/lib/brands'
-import type { ICPPersona } from '@/src/lib/tenant-settings'
 import type { CampaignMode } from '@/src/lib/orchestration/types'
 
-// Simplified steps - no channels (inherited from brand)
-const STEPS = ['basics', 'intent', 'dataSource', 'review'] as const
+// Simplified steps - just audience and intent signals
+const STEPS = ['basics', 'audience', 'review'] as const
 type Step = (typeof STEPS)[number]
 
 const stepLabels: Record<Step, string> = {
-  basics: 'Campaign Details',
-  intent: 'Campaign Focus',
-  dataSource: 'Data Source',
-  review: 'Review & Create',
+  basics: 'Campaign Name',
+  audience: 'Audience & Intent Signals',
+  review: 'Review & Launch',
 }
 
 function NewCampaignContent() {
@@ -29,23 +26,16 @@ function NewCampaignContent() {
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  // Form state - Basics
+  // Form state
   const [brandId, setBrandId] = useState('')
   const [selectedBrand, setSelectedBrand] = useState<Brand | null>(null)
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
 
-  // Form state - Intent/Targeting
-  const [targetPersona, setTargetPersona] = useState('')
-  const [primaryAngle, setPrimaryAngle] = useState('')
-  const [customInstructions, setCustomInstructions] = useState('')
-
-  // Form state - Data Source
-  const [dataSource, setDataSource] = useState<DataSourceData>({
-    type: '',
-    config: {},
-    autoIngest: false,
-  })
+  // Audience & Intent Signals
+  const [audienceDescription, setAudienceDescription] = useState('')
+  const [intentSignals, setIntentSignals] = useState<string[]>([''])
+  const [dataSourceType, setDataSourceType] = useState<'intent' | 'pixel' | 'apollo' | 'csv' | 'manual'>('intent')
 
   useEffect(() => {
     fetchData()
@@ -81,9 +71,21 @@ function NewCampaignContent() {
     setBrandId(newBrandId)
     const brand = brands.find((b) => b.id === newBrandId) || null
     setSelectedBrand(brand)
-    // Reset persona selection when brand changes
-    setTargetPersona('')
   }, [brands])
+
+  const addIntentSignal = () => {
+    setIntentSignals([...intentSignals, ''])
+  }
+
+  const removeIntentSignal = (index: number) => {
+    setIntentSignals(intentSignals.filter((_, i) => i !== index))
+  }
+
+  const updateIntentSignal = (index: number, value: string) => {
+    const newSignals = [...intentSignals]
+    newSignals[index] = value
+    setIntentSignals(newSignals)
+  }
 
   // Navigation
   const currentStepIndex = STEPS.indexOf(currentStep)
@@ -104,17 +106,14 @@ function NewCampaignContent() {
 
   // Validation for each step
   const isBasicsValid = brandId && name.trim()
-  const isIntentValid = true // Optional fields
-  const isDataSourceValid = dataSource.type !== ''
+  const isAudienceValid = audienceDescription.trim() && intentSignals.some(s => s.trim())
 
   const canProceed = () => {
     switch (currentStep) {
       case 'basics':
         return isBasicsValid
-      case 'intent':
-        return isIntentValid
-      case 'dataSource':
-        return isDataSourceValid
+      case 'audience':
+        return isAudienceValid
       default:
         return true
     }
@@ -134,22 +133,22 @@ function NewCampaignContent() {
           ? 'linkedin_only'
           : 'email_only'
 
+      // Filter out empty intent signals
+      const validIntentSignals = intentSignals.filter(s => s.trim())
+
       const res = await fetch('/api/campaigns', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           brand_id: brandId,
           name,
-          description: description || undefined,
           mode: derivedMode,
-          custom_instructions: customInstructions || undefined,
-          target_persona: targetPersona || undefined,
-          primary_angle: primaryAngle || undefined,
-          // Channels and integrations inherited from brand
-          // Data source configuration
-          data_source_type: dataSource.type || undefined,
-          data_source_config: dataSource.config,
-          auto_ingest: dataSource.autoIngest,
+          // Audience & Intent Signals
+          target_persona: audienceDescription,
+          primary_angle: validIntentSignals.join('\n'),
+          // Data source type
+          data_source_type: dataSourceType,
+          auto_ingest: dataSourceType === 'intent' || dataSourceType === 'pixel',
         }),
       })
 
@@ -341,101 +340,108 @@ function NewCampaignContent() {
             </div>
           )}
 
-          {/* Step 2: Campaign Intent/Focus */}
-          {currentStep === 'intent' && (
+          {/* Step 2: Audience & Intent Signals */}
+          {currentStep === 'audience' && (
             <div className="space-y-6">
               <div>
-                <h2 className={cn(jsb.heading, 'text-xl mb-2')}>Campaign Focus</h2>
+                <h2 className={cn(jsb.heading, 'text-xl mb-2')}>Audience & Intent Signals</h2>
                 <p className={jsb.subheading}>
-                  Define the targeting and messaging for this campaign
+                  Define who you're targeting and what signals indicate they're ready
                 </p>
               </div>
 
-              {/* Target Persona */}
+              {/* Audience Description */}
               <div>
-                <label htmlFor="targetPersona" className={cn(jsb.label, 'block mb-2')}>
-                  Target Persona <span className="text-gray-500 text-xs">(optional)</span>
+                <label htmlFor="audienceDescription" className={cn(jsb.label, 'block mb-2')}>
+                  Audience Description <span className="text-red-400">*</span>
                 </label>
-                {selectedBrand?.icp?.personas && selectedBrand.icp.personas.length > 0 ? (
-                  <select
-                    id="targetPersona"
-                    value={targetPersona}
-                    onChange={(e) => setTargetPersona(e.target.value)}
-                    className={cn(jsb.input, 'w-full px-4 py-3')}
-                  >
-                    <option value="">All personas</option>
-                    {selectedBrand.icp.personas.map((persona: ICPPersona, index: number) => (
-                      <option key={index} value={persona.job_title}>
-                        {persona.job_title}
-                      </option>
-                    ))}
-                  </select>
-                ) : (
-                  <input
-                    id="targetPersona"
-                    type="text"
-                    value={targetPersona}
-                    onChange={(e) => setTargetPersona(e.target.value)}
-                    placeholder="e.g., CFOs at mid-market companies"
-                    className={cn(jsb.input, 'w-full px-4 py-3')}
-                  />
-                )}
+                <textarea
+                  id="audienceDescription"
+                  value={audienceDescription}
+                  onChange={(e) => setAudienceDescription(e.target.value)}
+                  placeholder="e.g., CFOs at mid-market SaaS companies with 100-500 employees"
+                  rows={4}
+                  className={cn(jsb.input, 'w-full px-4 py-3 resize-y')}
+                  autoFocus
+                />
                 <p className="text-xs text-gray-500 mt-1">
                   Who specifically are you targeting in this campaign?
                 </p>
               </div>
 
-              {/* Primary Angle */}
+              {/* Data Source Type */}
               <div>
-                <label htmlFor="primaryAngle" className={cn(jsb.label, 'block mb-2')}>
-                  Primary Messaging Angle <span className="text-gray-500 text-xs">(optional)</span>
+                <label className={cn(jsb.label, 'block mb-2')}>
+                  Data Source Type
                 </label>
-                <textarea
-                  id="primaryAngle"
-                  value={primaryAngle}
-                  onChange={(e) => setPrimaryAngle(e.target.value)}
-                  placeholder="e.g., Cost reduction through automation, Security compliance for healthcare, etc."
-                  rows={3}
-                  className={cn(jsb.input, 'w-full px-4 py-3 resize-y')}
-                />
-                <p className="text-xs text-gray-500 mt-1">
-                  What's the main value proposition or angle for this campaign?
-                </p>
+                <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                  {(['intent', 'pixel', 'apollo', 'csv', 'manual'] as const).map((type) => (
+                    <button
+                      key={type}
+                      type="button"
+                      onClick={() => setDataSourceType(type)}
+                      className={cn(
+                        'px-4 py-2 rounded-md text-sm font-medium transition-colors border',
+                        dataSourceType === type
+                          ? 'bg-jsb-pink border-jsb-pink text-white'
+                          : 'bg-jsb-navy-lighter border-jsb-navy-lighter text-gray-300 hover:bg-jsb-navy-light'
+                      )}
+                    >
+                      {type.charAt(0).toUpperCase() + type.slice(1)}
+                    </button>
+                  ))}
+                </div>
               </div>
 
-              {/* Custom Instructions */}
+              {/* Intent Signals */}
               <div>
-                <label htmlFor="customInstructions" className={cn(jsb.label, 'block mb-2')}>
-                  Custom Instructions <span className="text-gray-500 text-xs">(optional)</span>
+                <label className={cn(jsb.label, 'block mb-2')}>
+                  Intent Signals <span className="text-red-400">*</span>
                 </label>
-                <textarea
-                  id="customInstructions"
-                  value={customInstructions}
-                  onChange={(e) => setCustomInstructions(e.target.value)}
-                  placeholder="Any specific instructions for AI-generated content in this campaign..."
-                  rows={4}
-                  className={cn(jsb.input, 'w-full px-4 py-3 resize-y')}
-                />
+                <p className="text-xs text-gray-500 mb-3">
+                  What signals indicate this prospect is ready? (e.g., visited pricing page, downloaded whitepaper, recent funding)
+                </p>
+                <div className="space-y-3">
+                  {intentSignals.map((signal, index) => (
+                    <div key={index} className="flex gap-2">
+                      <input
+                        type="text"
+                        value={signal}
+                        onChange={(e) => updateIntentSignal(index, e.target.value)}
+                        placeholder={`Intent signal ${index + 1}`}
+                        className={cn(jsb.input, 'flex-1 px-4 py-3')}
+                      />
+                      {intentSignals.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => removeIntentSignal(index)}
+                          className={cn(jsb.buttonGhost, 'px-3 py-3 text-red-400 hover:bg-red-500/10')}
+                          title="Remove signal"
+                        >
+                          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={addIntentSignal}
+                    className={cn(jsb.buttonGhost, 'px-4 py-2 text-sm')}
+                  >
+                    + Add Intent Signal
+                  </button>
+                </div>
               </div>
             </div>
           )}
 
-          {/* Step 3: Data Source */}
-          {currentStep === 'dataSource' && (
-            <DataSourceStep
-              data={dataSource}
-              brandIcp={selectedBrand?.icp}
-              onChange={setDataSource}
-              onNext={goNext}
-              onBack={goBack}
-            />
-          )}
-
-          {/* Step 4: Review */}
+          {/* Step 3: Review */}
           {currentStep === 'review' && (
             <div className="space-y-6">
               <div>
-                <h2 className={cn(jsb.heading, 'text-xl mb-2')}>Review & Create</h2>
+                <h2 className={cn(jsb.heading, 'text-xl mb-2')}>Review & Launch</h2>
                 <p className={jsb.subheading}>
                   Review your campaign settings before creating
                 </p>
@@ -470,25 +476,25 @@ function NewCampaignContent() {
                   </div>
                 </div>
 
-                {/* Intent/Focus */}
+                {/* Audience & Intent */}
                 <div className={cn(jsb.card, 'p-4 bg-jsb-navy-lighter/50')}>
-                  <h3 className="text-sm font-medium text-gray-400 mb-3">Campaign Focus</h3>
-                  <div className="space-y-2">
-                    {targetPersona && (
-                      <div className="flex justify-between">
-                        <span className="text-gray-500">Target Persona:</span>
-                        <span className="text-white">{targetPersona}</span>
-                      </div>
-                    )}
-                    {primaryAngle && (
-                      <div className="flex justify-between">
-                        <span className="text-gray-500">Primary Angle:</span>
-                        <span className="text-white text-sm">{primaryAngle}</span>
-                      </div>
-                    )}
-                    {!targetPersona && !primaryAngle && (
-                      <p className="text-gray-500 text-sm">Using brand defaults</p>
-                    )}
+                  <h3 className="text-sm font-medium text-gray-400 mb-3">Audience & Intent Signals</h3>
+                  <div className="space-y-3">
+                    <div>
+                      <span className="text-gray-500 text-sm">Audience:</span>
+                      <p className="text-white mt-1">{audienceDescription}</p>
+                    </div>
+                    <div>
+                      <span className="text-gray-500 text-sm">Intent Signals:</span>
+                      <ul className="mt-1 space-y-1">
+                        {intentSignals.filter(s => s.trim()).map((signal, index) => (
+                          <li key={index} className="text-white flex items-start gap-2">
+                            <span className="text-jsb-pink mt-1">•</span>
+                            <span>{signal}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
                   </div>
                 </div>
 
@@ -498,11 +504,13 @@ function NewCampaignContent() {
                   <div className="space-y-2">
                     <div className="flex justify-between">
                       <span className="text-gray-500">Type:</span>
-                      <span className="text-white capitalize">{dataSource.type}</span>
+                      <span className="text-white capitalize">{dataSourceType}</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-gray-500">Auto-ingest:</span>
-                      <span className="text-white">{dataSource.autoIngest ? 'Enabled' : 'Disabled'}</span>
+                      <span className="text-white">
+                        {dataSourceType === 'intent' || dataSourceType === 'pixel' ? 'Enabled' : 'Disabled'}
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -510,45 +518,43 @@ function NewCampaignContent() {
             </div>
           )}
 
-          {/* Navigation Buttons - Hide for dataSource step (has its own navigation) */}
-          {currentStep !== 'dataSource' && (
-            <div className="flex gap-3 mt-8 pt-6 border-t border-jsb-navy-lighter">
-              {canGoBack && (
-                <button
-                  onClick={goBack}
-                  className={cn(jsb.buttonGhost, 'px-6 py-3')}
-                >
-                  Back
-                </button>
-              )}
+          {/* Navigation Buttons */}
+          <div className="flex gap-3 mt-8 pt-6 border-t border-jsb-navy-lighter">
+            {canGoBack && (
+              <button
+                onClick={goBack}
+                className={cn(jsb.buttonGhost, 'px-6 py-3')}
+              >
+                Back
+              </button>
+            )}
 
-              {currentStep === 'review' ? (
-                <button
-                  onClick={handleSubmit}
-                  disabled={submitting}
-                  className={cn(
-                    jsb.buttonPrimary,
-                    'flex-1 py-3',
-                    submitting && 'opacity-50 cursor-not-allowed'
-                  )}
-                >
-                  {submitting ? 'Creating Campaign...' : 'Create Campaign'}
-                </button>
-              ) : (
-                <button
-                  onClick={goNext}
-                  disabled={!canProceed()}
-                  className={cn(
-                    jsb.buttonPrimary,
-                    'flex-1 py-3',
-                    !canProceed() && 'opacity-50 cursor-not-allowed'
-                  )}
-                >
-                  Continue
-                </button>
-              )}
-            </div>
-          )}
+            {currentStep === 'review' ? (
+              <button
+                onClick={handleSubmit}
+                disabled={submitting}
+                className={cn(
+                  jsb.buttonPrimary,
+                  'flex-1 py-3',
+                  submitting && 'opacity-50 cursor-not-allowed'
+                )}
+              >
+                {submitting ? 'Creating Campaign...' : 'Create Campaign'}
+              </button>
+            ) : (
+              <button
+                onClick={goNext}
+                disabled={!canProceed()}
+                className={cn(
+                  jsb.buttonPrimary,
+                  'flex-1 py-3',
+                  !canProceed() && 'opacity-50 cursor-not-allowed'
+                )}
+              >
+                Continue
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </Shell>
