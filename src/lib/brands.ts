@@ -11,6 +11,45 @@ import type { DataSourceType, CampaignDataSourceConfig, TenantICP } from './tena
 // TYPES
 // ============================================================================
 
+export interface BrandSettings {
+  // Integrations
+  integrations?: {
+    smartlead?: {
+      api_key: string
+      campaign_id?: string
+    }
+    instantly?: {
+      api_key: string
+      campaign_id?: string
+    }
+    nureply?: {
+      api_key: string
+      campaign_id?: string
+    }
+    heyreach?: {
+      api_key: string
+    }
+    gohighlevel?: {
+      api_key: string
+      location_id?: string
+    }
+  }
+
+  // LLM Configuration
+  llm_provider?: 'anthropic' | 'openai'
+  llm_config?: {
+    api_key: string
+    model?: string
+  }
+
+  // Active Providers
+  active_email_provider?: 'smartlead' | 'instantly' | 'nureply'
+  active_linkedin_provider?: 'heyreach'
+
+  // Enabled Channels
+  enabled_channels?: Array<'email' | 'linkedin'>
+}
+
 export interface Brand {
   id: string
   tenant_id: string
@@ -37,6 +76,10 @@ export interface Brand {
   icp?: TenantICP
   icp_source_url?: string
   icp_research_completed_at?: string
+
+  // Brand-specific settings (integrations, LLM, channels)
+  settings?: BrandSettings
+  setup_completed?: boolean
 
   // Status
   is_active: boolean
