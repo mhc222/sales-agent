@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, Suspense } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { Shell } from '@/components/layout/Shell'
@@ -556,15 +556,5 @@ function NewCampaignContent() {
 }
 
 export default function NewCampaignPage() {
-  return (
-    <Suspense fallback={
-      <Shell>
-        <div className="flex items-center justify-center h-64">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-jsb-pink"></div>
-        </div>
-      </Shell>
-    }>
-      <NewCampaignContent />
-    </Suspense>
-  )
+  return <NewCampaignContent />
 }
