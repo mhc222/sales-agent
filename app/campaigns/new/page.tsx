@@ -18,7 +18,7 @@ const stepLabels: Record<Step, string> = {
   review: 'Review & Launch',
 }
 
-function NewCampaignContent() {
+export default function NewCampaignPage() {
   const router = useRouter()
   const [currentStep, setCurrentStep] = useState<Step>('basics')
   const [brands, setBrands] = useState<Brand[]>([])
@@ -718,8 +718,4 @@ function NewCampaignContent() {
       </div>
     </Shell>
   )
-}
-
-export default function NewCampaignPage() {
-  return <NewCampaignContent />
 }
