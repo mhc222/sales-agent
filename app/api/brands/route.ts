@@ -13,11 +13,27 @@ const supabase = createClient(
  */
 export async function GET(request: NextRequest) {
   try {
-    const tenantId = await getTenantId(request)
-    if (!tenantId) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    console.log('[Brands API] Getting tenant ID...')
+    let tenantId: string | null = null
+
+    try {
+      tenantId = await getTenantId(request)
+    } catch (authError) {
+      console.error('[Brands API] Auth error:', authError)
+      return NextResponse.json({
+        error: 'Authentication failed',
+        details: authError instanceof Error ? authError.message : 'Unknown auth error'
+      }, { status: 401 })
     }
 
+    console.log('[Brands API] Tenant ID:', tenantId)
+
+    if (!tenantId) {
+      console.log('[Brands API] No tenant ID found - unauthorized')
+      return NextResponse.json({ error: 'No tenant found. Please complete onboarding first.' }, { status: 401 })
+    }
+
+    console.log('[Brands API] Fetching brands for tenant:', tenantId)
     const { data, error } = await supabase
       .from('brands')
       .select('*')
@@ -26,9 +42,11 @@ export async function GET(request: NextRequest) {
       .order('name')
 
     if (error) {
-      console.error('[Brands API] Error:', error)
+      console.error('[Brands API] Database error:', error)
       return NextResponse.json({ error: error.message }, { status: 500 })
     }
+
+    console.log('[Brands API] Found brands:', data?.length)
 
     // Get campaign counts for each brand
     const brandIds = data?.map(b => b.id) || []
