@@ -3,6 +3,8 @@ import { createClient } from '@/src/lib/supabase-server'
 import { getTenantLLM } from '@/src/lib/tenant-settings'
 import { INDUSTRY_IDS } from '@/src/lib/apollo'
 
+export const dynamic = 'force-dynamic'
+
 interface ParsedSearchParams {
   jobTitles: string[]
   industry?: string
