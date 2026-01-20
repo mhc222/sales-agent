@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/src/lib/supabase-server'
 import { createServiceClient } from '@/src/lib/supabase-server'
+import { normalizeDomain } from '@/src/lib/dnc'
 import type {
   AccountCriteria,
   ICPPersona,
@@ -310,8 +311,8 @@ export async function POST(request: Request) {
     if (dnc?.entries?.length > 0 && !dnc.skip) {
       const dncEntries = dnc.entries.map((entry: { type: string; value: string }) => ({
         tenant_id: tenant.id,
-        email: entry.type === 'email' ? entry.value : null,
-        domain: entry.type === 'domain' ? entry.value : null,
+        email: entry.type === 'email' ? entry.value.toLowerCase() : null,
+        domain: entry.type === 'domain' ? normalizeDomain(entry.value) : null,
         reason: 'Added during onboarding',
         added_by: user.id,
       }))

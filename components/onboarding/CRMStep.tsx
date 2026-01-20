@@ -122,7 +122,7 @@ export default function CRMStep({ data, onChange, onNext, onBack }: Props) {
                   placeholder="Enter your GoHighLevel API key"
                 />
                 <p className="text-xs text-gray-500 mt-1">
-                  Found in GHL Settings → Business Profile → API Keys
+                  Found in GHL Settings → Integrations → Private Integrations → Create/Select App → API Key
                 </p>
               </div>
 

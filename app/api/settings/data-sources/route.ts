@@ -29,6 +29,11 @@ export async function GET(request: Request) {
     const settings = tenant.settings || {}
     const integrations = settings.integrations || {}
 
+    // AudienceLab sources are stored as an array - find pixel and intent sources
+    const audienceLabSources = integrations.audiencelab || []
+    const pixelSource = audienceLabSources.find((s: { type: string }) => s.type === 'pixel')
+    const intentSource = audienceLabSources.find((s: { type: string }) => s.type === 'intent')
+
     // Return masked keys for display
     return NextResponse.json({
       apollo: {
@@ -36,14 +41,14 @@ export async function GET(request: Request) {
         api_key_masked: maskApiKey(integrations.apollo?.api_key),
       },
       pixel: {
-        enabled: !!integrations.pixel?.api_key,
-        api_url: integrations.pixel?.api_url || '',
-        api_key_masked: maskApiKey(integrations.pixel?.api_key),
+        enabled: !!pixelSource?.api_key,
+        api_url: pixelSource?.api_url || '',
+        api_key_masked: maskApiKey(pixelSource?.api_key),
       },
       intent: {
-        enabled: !!integrations.intent?.api_key,
-        api_url: integrations.intent?.api_url || '',
-        api_key_masked: maskApiKey(integrations.intent?.api_key),
+        enabled: !!intentSource?.api_key,
+        api_url: intentSource?.api_url || '',
+        api_key_masked: maskApiKey(intentSource?.api_key),
       },
       data_sources: settings.data_sources || { enabled: [] },
     })
@@ -94,43 +99,90 @@ export async function POST(request: Request) {
     // Build updated settings
     const currentIntegrations = currentSettings.integrations || {}
     const currentDataSources = currentSettings.data_sources || { enabled: [] }
+    let updatedIntegrations = { ...currentIntegrations }
 
-    // Update the specific integration
-    const updatedIntegration: Record<string, unknown> = {
-      ...(currentIntegrations[source as keyof typeof currentIntegrations] || {}),
-    }
+    // Handle pixel/intent sources - stored in audiencelab array
+    if (source === 'pixel' || source === 'intent') {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const audienceLabSources: any[] = [...(currentIntegrations.audiencelab || [])]
+      const existingIndex = audienceLabSources.findIndex((s: { type: string }) => s.type === source)
 
-    if (api_key !== undefined && api_key !== '') {
-      updatedIntegration.api_key = api_key
-    }
-    if (api_url !== undefined) {
-      updatedIntegration.api_url = api_url
-    }
-    if (enabled !== undefined) {
-      updatedIntegration.enabled = enabled
+      const updatedSource: Record<string, unknown> = {
+        ...(existingIndex >= 0 ? audienceLabSources[existingIndex] : {}),
+        type: source,
+        name: source === 'pixel' ? 'Website Visitors' : 'Intent Data',
+        enabled: enabled ?? true,
+      }
+
+      if (api_key !== undefined && api_key !== '') {
+        updatedSource.api_key = api_key
+      }
+      if (api_url !== undefined) {
+        updatedSource.api_url = api_url
+      }
+
+      if (existingIndex >= 0) {
+        audienceLabSources[existingIndex] = updatedSource
+      } else {
+        audienceLabSources.push(updatedSource)
+      }
+
+      updatedIntegrations.audiencelab = audienceLabSources as typeof updatedIntegrations.audiencelab
+    } else {
+      // Apollo uses flat structure
+      const updatedIntegration: Record<string, unknown> = {
+        ...(currentIntegrations[source as keyof typeof currentIntegrations] || {}),
+      }
+
+      if (api_key !== undefined && api_key !== '') {
+        updatedIntegration.api_key = api_key
+      }
+      if (api_url !== undefined) {
+        updatedIntegration.api_url = api_url
+      }
+      if (enabled !== undefined) {
+        updatedIntegration.enabled = enabled
+      }
+
+      updatedIntegrations = {
+        ...updatedIntegrations,
+        [source]: updatedIntegration,
+      }
     }
 
     // Update enabled data sources array
     let enabledSources = [...(currentDataSources.enabled || [])]
-    const hasCredentials =
-      source === 'apollo'
-        ? !!updatedIntegration.api_key
-        : !!(updatedIntegration.api_key && updatedIntegration.api_url)
 
-    if (enabled && hasCredentials) {
-      if (!enabledSources.includes(source)) {
-        enabledSources.push(source)
+    // Check if audiencelab should be in enabled sources
+    const audienceLabSources = updatedIntegrations.audiencelab || []
+    const hasAudienceLabCreds = audienceLabSources.some(
+      (s: { api_key?: string; api_url?: string; enabled?: boolean }) =>
+        s.api_key && s.api_url && s.enabled !== false
+    )
+
+    if (hasAudienceLabCreds) {
+      if (!enabledSources.includes('audiencelab')) {
+        enabledSources.push('audiencelab')
       }
     } else {
-      enabledSources = enabledSources.filter((s) => s !== source)
+      enabledSources = enabledSources.filter((s) => s !== 'audiencelab')
+    }
+
+    // Handle apollo separately
+    if (source === 'apollo') {
+      const apolloIntegration = updatedIntegrations.apollo as { api_key?: string; enabled?: boolean } | undefined
+      if (apolloIntegration?.api_key && apolloIntegration?.enabled !== false) {
+        if (!enabledSources.includes('apollo')) {
+          enabledSources.push('apollo')
+        }
+      } else {
+        enabledSources = enabledSources.filter((s) => s !== 'apollo')
+      }
     }
 
     const updatedSettings: TenantSettings = {
       ...currentSettings,
-      integrations: {
-        ...currentIntegrations,
-        [source]: updatedIntegration,
-      },
+      integrations: updatedIntegrations,
       data_sources: {
         ...currentDataSources,
         enabled: enabledSources,

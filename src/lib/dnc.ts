@@ -1,5 +1,27 @@
 import { createServiceClient } from './supabase-server'
 
+/**
+ * Normalize a domain or URL to just the root domain
+ * Handles: https://www.example.com/, www.example.com, example.com/path, etc.
+ */
+export function normalizeDomain(input: string): string {
+  let domain = input.toLowerCase().trim()
+
+  // Remove protocol
+  domain = domain.replace(/^https?:\/\//, '')
+
+  // Remove www.
+  domain = domain.replace(/^www\./, '')
+
+  // Remove path, query, hash
+  domain = domain.split('/')[0].split('?')[0].split('#')[0]
+
+  // Remove port
+  domain = domain.split(':')[0]
+
+  return domain
+}
+
 export type DNCEntry = {
   id: string
   tenant_id: string
@@ -55,7 +77,7 @@ export async function checkDNC(
 
   dncEntries?.forEach((entry: { email: string | null; domain: string | null; brand_id: string | null }) => {
     if (entry.email) blockedEmails.add(entry.email.toLowerCase())
-    if (entry.domain) blockedDomains.add(entry.domain.toLowerCase())
+    if (entry.domain) blockedDomains.add(normalizeDomain(entry.domain))
   })
 
   const blocked: string[] = []
@@ -105,7 +127,7 @@ export async function addToDNC(
     tenant_id: tenantId,
     brand_id: entry.brandId || null,
     email: entry.type === 'email' ? entry.value.toLowerCase() : null,
-    domain: entry.type === 'domain' ? entry.value.toLowerCase() : null,
+    domain: entry.type === 'domain' ? normalizeDomain(entry.value) : null,
     reason: entry.reason || null,
     added_by: addedBy || null,
   }))

@@ -3,6 +3,18 @@
 import { useState, useRef } from 'react'
 import { jsb, cn } from '@/lib/styles'
 
+/**
+ * Normalize a domain or URL to just the root domain
+ */
+function normalizeDomain(input: string): string {
+  let domain = input.toLowerCase().trim()
+  domain = domain.replace(/^https?:\/\//, '')
+  domain = domain.replace(/^www\./, '')
+  domain = domain.split('/')[0].split('?')[0].split('#')[0]
+  domain = domain.split(':')[0]
+  return domain
+}
+
 type DNCData = {
   entries: Array<{ type: 'email' | 'domain'; value: string }>
   skip: boolean
@@ -24,8 +36,9 @@ export default function DNCStep({ data, onChange, onComplete, onBack, loading }:
   const handleAddEntry = () => {
     if (!manualEntry.trim()) return
 
-    const value = manualEntry.trim().toLowerCase()
-    const type = value.includes('@') ? 'email' : 'domain'
+    const raw = manualEntry.trim().toLowerCase()
+    const isEmail = raw.includes('@')
+    const value = isEmail ? raw : normalizeDomain(raw)
 
     // Check for duplicates
     if (data.entries.some(e => e.value === value)) {
@@ -34,7 +47,7 @@ export default function DNCStep({ data, onChange, onComplete, onBack, loading }:
 
     onChange({
       ...data,
-      entries: [...data.entries, { type, value }],
+      entries: [...data.entries, { type: isEmail ? 'email' : 'domain', value }],
       skip: false,
     })
     setManualEntry('')
@@ -62,9 +75,12 @@ export default function DNCStep({ data, onChange, onComplete, onBack, loading }:
         // Skip header rows
         if (line === 'email' || line === 'domain') continue
 
-        const type = line.includes('@') ? 'email' : 'domain'
-        if (!data.entries.some(e => e.value === line) && !newEntries.some(e => e.value === line)) {
-          newEntries.push({ type, value: line })
+        const isEmail = line.includes('@')
+        const value = isEmail ? line : normalizeDomain(line)
+        const type = isEmail ? 'email' : 'domain'
+
+        if (!data.entries.some(e => e.value === value) && !newEntries.some(e => e.value === value)) {
+          newEntries.push({ type, value })
         }
       }
 

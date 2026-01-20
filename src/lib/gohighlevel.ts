@@ -7,7 +7,7 @@
  */
 
 const GHL_BASE_URL = 'https://services.leadconnectorhq.com'
-const GHL_API_VERSION = '2021-07-28'
+const GHL_API_VERSION = '2021-07-28' // Private Integration API version
 
 // ============================================================================
 // TYPES

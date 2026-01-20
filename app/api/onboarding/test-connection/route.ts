@@ -163,13 +163,17 @@ export async function POST(request: Request) {
               headers: {
                 'Authorization': `Bearer ${apiKey}`,
                 'Version': '2021-07-28',
+                'Accept': 'application/json',
               },
             }
           )
           success = res.ok
           if (!success) {
             const errorData = await res.json().catch(() => ({}))
-            message = errorData.message || 'Invalid API key or Location ID'
+            // GHL returns different error formats - handle all cases
+            message = errorData.message || errorData.error || errorData.msg ||
+              `GHL API error (${res.status}): Check that you're using a Private Integration API key`
+            console.error('[GHL Test] Error:', res.status, errorData)
           }
         } catch (err) {
           message = err instanceof Error ? err.message : 'Failed to connect'
