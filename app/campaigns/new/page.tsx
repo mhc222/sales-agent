@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { Shell } from '@/components/layout/Shell'
@@ -23,7 +23,7 @@ const stepLabels: Record<Step, string> = {
   review: 'Review & Create',
 }
 
-export default function NewCampaignPage() {
+function NewCampaignContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const [currentStep, setCurrentStep] = useState<Step>('basics')
@@ -559,5 +559,19 @@ export default function NewCampaignPage() {
         </div>
       </div>
     </Shell>
+  )
+}
+
+export default function NewCampaignPage() {
+  return (
+    <Suspense fallback={
+      <Shell>
+        <div className="flex items-center justify-center h-64">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-jsb-pink"></div>
+        </div>
+      </Shell>
+    }>
+      <NewCampaignContent />
+    </Suspense>
   )
 }
