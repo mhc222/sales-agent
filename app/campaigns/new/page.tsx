@@ -370,8 +370,8 @@ export default function NewCampaignPage() {
                   >
                     <option value="">All personas</option>
                     {selectedBrand.icp.personas.map((persona: ICPPersona, index: number) => (
-                      <option key={index} value={persona.title}>
-                        {persona.title} - {persona.seniority_level}
+                      <option key={index} value={persona.job_title}>
+                        {persona.job_title}
                       </option>
                     ))}
                   </select>
