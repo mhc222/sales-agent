@@ -83,11 +83,15 @@ export default function NewCampaignPage() {
       const settingsData = await settingsRes.json()
 
       if (brandsRes.ok) {
+        console.log('[Campaign New] Brands fetched:', brandsData.brands?.length)
         setBrands(brandsData.brands || [])
         if (brandsData.brands?.length > 0) {
           setBrandId(brandsData.brands[0].id)
           setSelectedBrand(brandsData.brands[0])
         }
+      } else {
+        console.error('[Campaign New] Brands fetch failed:', brandsData)
+        setError(`Failed to load brands: ${brandsData.error || 'Unknown error'}`)
       }
 
       if (settingsRes.ok && settingsData.settings) {
@@ -99,6 +103,7 @@ export default function NewCampaignPage() {
       }
     } catch (err) {
       console.error('Failed to load data:', err)
+      setError(err instanceof Error ? err.message : 'Failed to load data')
     } finally {
       setLoading(false)
     }
@@ -202,10 +207,27 @@ export default function NewCampaignPage() {
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
             </svg>
             <h3 className={cn(jsb.heading, 'text-lg mb-2')}>No brands found</h3>
-            <p className={jsb.subheading}>You need to create a brand before creating campaigns.</p>
-            <Link href="/brands/new" className={cn(jsb.buttonPrimary, 'px-6 py-2 mt-4 inline-block')}>
-              Create Brand
-            </Link>
+            <p className={jsb.subheading}>
+              {error ? (
+                <>Error loading brands: {error}</>
+              ) : (
+                <>You need to create a brand before creating campaigns.</>
+              )}
+            </p>
+            <div className="flex gap-3 justify-center mt-4">
+              <button
+                onClick={() => {
+                  setLoading(true)
+                  fetchData()
+                }}
+                className={cn(jsb.buttonGhost, 'px-6 py-2')}
+              >
+                Retry
+              </button>
+              <Link href="/brands/new" className={cn(jsb.buttonPrimary, 'px-6 py-2 inline-block')}>
+                Create Brand
+              </Link>
+            </div>
           </div>
         </div>
       </Shell>
