@@ -36,6 +36,12 @@ function NewCampaignContent() {
   const [audienceDescription, setAudienceDescription] = useState('')
   const [intentSignalsText, setIntentSignalsText] = useState('')
   const [dataSourceType, setDataSourceType] = useState<'intent' | 'pixel' | 'apollo' | 'csv' | 'manual'>('intent')
+  const [dataSourceConfig, setDataSourceConfig] = useState<{
+    api_url?: string
+    api_key?: string
+    saved_search_id?: string
+    file?: File
+  }>({})
 
   useEffect(() => {
     fetchData()
@@ -92,7 +98,24 @@ function NewCampaignContent() {
 
   // Validation for each step
   const isBasicsValid = brandId && name.trim()
-  const isAudienceValid = audienceDescription.trim() && intentSignalsText.trim()
+  const isAudienceValid = (() => {
+    if (!audienceDescription.trim() || !intentSignalsText.trim()) return false
+
+    // Validate credentials based on data source type
+    switch (dataSourceType) {
+      case 'intent':
+      case 'pixel':
+        return !!(dataSourceConfig.api_url && dataSourceConfig.api_key)
+      case 'apollo':
+        return !!dataSourceConfig.api_key
+      case 'csv':
+        return !!dataSourceConfig.file
+      case 'manual':
+        return true
+      default:
+        return false
+    }
+  })()
 
   const canProceed = () => {
     switch (currentStep) {
@@ -102,6 +125,29 @@ function NewCampaignContent() {
         return isAudienceValid
       default:
         return true
+    }
+  }
+
+  const prepareDataSourceConfig = () => {
+    switch (dataSourceType) {
+      case 'intent':
+      case 'pixel':
+        return {
+          api_url: dataSourceConfig.api_url,
+          api_key: dataSourceConfig.api_key,
+        }
+      case 'apollo':
+        return {
+          api_key: dataSourceConfig.api_key,
+          ...(dataSourceConfig.saved_search_id && {
+            saved_search_id: dataSourceConfig.saved_search_id
+          }),
+        }
+      case 'csv':
+      case 'manual':
+        return {}
+      default:
+        return {}
     }
   }
 
@@ -129,8 +175,9 @@ function NewCampaignContent() {
           // Audience & Intent Signals
           target_persona: audienceDescription,
           primary_angle: intentSignalsText.trim(),
-          // Data source type
+          // Data source configuration
           data_source_type: dataSourceType,
+          data_source_config: prepareDataSourceConfig(),
           auto_ingest: dataSourceType === 'intent' || dataSourceType === 'pixel',
         }),
       })
@@ -376,6 +423,110 @@ function NewCampaignContent() {
                 </div>
               </div>
 
+              {/* Apollo Credentials */}
+              {dataSourceType === 'apollo' && (
+                <div className={cn(jsb.card, 'p-5 space-y-4 bg-jsb-navy-lighter/50')}>
+                  <h3 className={cn(jsb.heading, 'text-sm')}>Apollo Credentials</h3>
+
+                  <div>
+                    <label className={cn(jsb.label, 'block mb-2')}>
+                      API Key <span className="text-red-400">*</span>
+                    </label>
+                    <input
+                      type="password"
+                      value={dataSourceConfig.api_key || ''}
+                      onChange={(e) => setDataSourceConfig({
+                        ...dataSourceConfig,
+                        api_key: e.target.value
+                      })}
+                      className={cn(jsb.input, 'w-full px-4 py-3')}
+                      placeholder="Enter Apollo API key"
+                    />
+                  </div>
+
+                  <div>
+                    <label className={cn(jsb.label, 'block mb-2')}>
+                      Saved Search ID <span className="text-gray-500 text-xs">(optional)</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={dataSourceConfig.saved_search_id || ''}
+                      onChange={(e) => setDataSourceConfig({
+                        ...dataSourceConfig,
+                        saved_search_id: e.target.value
+                      })}
+                      className={cn(jsb.input, 'w-full px-4 py-3')}
+                      placeholder="Apollo saved search ID"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* AudienceLab Credentials (Intent/Pixel) */}
+              {(dataSourceType === 'intent' || dataSourceType === 'pixel') && (
+                <div className={cn(jsb.card, 'p-5 space-y-4 bg-jsb-navy-lighter/50')}>
+                  <h3 className={cn(jsb.heading, 'text-sm')}>AudienceLab Credentials</h3>
+
+                  <div>
+                    <label className={cn(jsb.label, 'block mb-2')}>
+                      API URL <span className="text-red-400">*</span>
+                    </label>
+                    <input
+                      type="url"
+                      value={dataSourceConfig.api_url || ''}
+                      onChange={(e) => setDataSourceConfig({
+                        ...dataSourceConfig,
+                        api_url: e.target.value
+                      })}
+                      className={cn(jsb.input, 'w-full px-4 py-3')}
+                      placeholder="https://api.audiencelab.io/segment/..."
+                    />
+                  </div>
+
+                  <div>
+                    <label className={cn(jsb.label, 'block mb-2')}>
+                      API Key <span className="text-red-400">*</span>
+                    </label>
+                    <input
+                      type="password"
+                      value={dataSourceConfig.api_key || ''}
+                      onChange={(e) => setDataSourceConfig({
+                        ...dataSourceConfig,
+                        api_key: e.target.value
+                      })}
+                      className={cn(jsb.input, 'w-full px-4 py-3')}
+                      placeholder="Enter AudienceLab API key"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* CSV Upload */}
+              {dataSourceType === 'csv' && (
+                <div className={cn(jsb.card, 'p-5 space-y-4 bg-jsb-navy-lighter/50')}>
+                  <h3 className={cn(jsb.heading, 'text-sm')}>CSV File Upload</h3>
+                  <div>
+                    <label className={cn(jsb.label, 'block mb-2')}>
+                      Upload Lead File <span className="text-red-400">*</span>
+                    </label>
+                    <input
+                      type="file"
+                      accept=".csv"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0]
+                        if (file) setDataSourceConfig({ ...dataSourceConfig, file })
+                      }}
+                      className={cn(jsb.input, 'w-full px-4 py-3')}
+                    />
+                    {dataSourceConfig.file && (
+                      <p className="text-xs text-emerald-400 mt-2">
+                        Selected: {dataSourceConfig.file.name}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
+
               {/* Intent Signals */}
               <div>
                 <label htmlFor="intentSignals" className={cn(jsb.label, 'block mb-2')}>
@@ -468,6 +619,51 @@ function NewCampaignContent() {
                       <span className="text-gray-500">Type:</span>
                       <span className="text-white capitalize">{dataSourceType}</span>
                     </div>
+
+                    {/* Apollo credentials display */}
+                    {dataSourceType === 'apollo' && dataSourceConfig.api_key && (
+                      <>
+                        <div className="flex justify-between">
+                          <span className="text-gray-500">API Key:</span>
+                          <span className="text-white font-mono text-sm">
+                            {'●'.repeat(12)}{dataSourceConfig.api_key.slice(-6)}
+                          </span>
+                        </div>
+                        {dataSourceConfig.saved_search_id && (
+                          <div className="flex justify-between">
+                            <span className="text-gray-500">Saved Search:</span>
+                            <span className="text-white">{dataSourceConfig.saved_search_id}</span>
+                          </div>
+                        )}
+                      </>
+                    )}
+
+                    {/* AudienceLab credentials */}
+                    {(dataSourceType === 'intent' || dataSourceType === 'pixel') && (
+                      <>
+                        <div className="flex justify-between items-start">
+                          <span className="text-gray-500">API URL:</span>
+                          <span className="text-white text-sm truncate max-w-[200px]">
+                            {dataSourceConfig.api_url}
+                          </span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-gray-500">API Key:</span>
+                          <span className="text-white font-mono text-sm">
+                            {'●'.repeat(12)}{dataSourceConfig.api_key?.slice(-6) || ''}
+                          </span>
+                        </div>
+                      </>
+                    )}
+
+                    {/* CSV file */}
+                    {dataSourceType === 'csv' && dataSourceConfig.file && (
+                      <div className="flex justify-between">
+                        <span className="text-gray-500">File:</span>
+                        <span className="text-white">{dataSourceConfig.file.name}</span>
+                      </div>
+                    )}
+
                     <div className="flex justify-between">
                       <span className="text-gray-500">Auto-ingest:</span>
                       <span className="text-white">

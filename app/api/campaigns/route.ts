@@ -87,6 +87,10 @@ export async function POST(request: NextRequest) {
       connection_timeout_hours,
       smartlead_campaign_id,
       heyreach_campaign_id,
+      // Data source fields
+      data_source_type,
+      data_source_config,
+      auto_ingest,
     } = body
 
     if (!brand_id || !name || !mode) {
@@ -94,6 +98,27 @@ export async function POST(request: NextRequest) {
         { error: 'brand_id, name, and mode are required' },
         { status: 400 }
       )
+    }
+
+    // Validate data source credentials if auto_ingest is enabled
+    if (auto_ingest && data_source_type) {
+      const config = data_source_config || {}
+
+      if (data_source_type === 'intent' || data_source_type === 'pixel') {
+        if (!config.api_url || !config.api_key) {
+          return NextResponse.json(
+            { error: `${data_source_type} requires api_url and api_key` },
+            { status: 400 }
+          )
+        }
+      } else if (data_source_type === 'apollo') {
+        if (!config.api_key) {
+          return NextResponse.json(
+            { error: 'Apollo requires api_key' },
+            { status: 400 }
+          )
+        }
+      }
     }
 
     // Verify brand belongs to tenant
@@ -128,6 +153,10 @@ export async function POST(request: NextRequest) {
         connection_timeout_hours: connection_timeout_hours || 72,
         smartlead_campaign_id,
         heyreach_campaign_id,
+        // Data source fields
+        data_source_type: data_source_type || null,
+        data_source_config: data_source_config || {},
+        auto_ingest: auto_ingest || false,
         status: 'draft',
       })
       .select(`
