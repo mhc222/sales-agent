@@ -8,6 +8,8 @@ import { jsb, cn } from '@/lib/styles'
 import type { Brand } from '@/src/lib/brands'
 import type { CampaignMode } from '@/src/lib/orchestration/types'
 
+export const dynamic = 'force-dynamic'
+
 // Simplified steps - just audience and intent signals
 const STEPS = ['basics', 'audience', 'review'] as const
 type Step = (typeof STEPS)[number]
