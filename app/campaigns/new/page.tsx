@@ -98,10 +98,9 @@ function NewCampaignContent() {
 
   // Validation for each step
   const isBasicsValid = brandId && name.trim()
-  const isAudienceValid = (() => {
-    if (!audienceDescription.trim() || !intentSignalsText.trim()) return false
 
-    // Validate credentials based on data source type
+  // Validate credentials based on data source type
+  const hasValidCredentials = () => {
     switch (dataSourceType) {
       case 'intent':
       case 'pixel':
@@ -115,7 +114,9 @@ function NewCampaignContent() {
       default:
         return false
     }
-  })()
+  }
+
+  const isAudienceValid = audienceDescription.trim() && intentSignalsText.trim() && hasValidCredentials()
 
   const canProceed = () => {
     switch (currentStep) {
