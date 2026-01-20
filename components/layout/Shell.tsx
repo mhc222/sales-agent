@@ -3,7 +3,6 @@
 import { useState, useEffect } from 'react'
 import { Sidebar } from './Sidebar'
 import SettingsChat from '../SettingsChat'
-import { TenantProvider } from '@/contexts/TenantContext'
 
 interface ShellProps {
   children: React.ReactNode
@@ -25,8 +24,7 @@ export function Shell({ children }: ShellProps) {
   }, [])
 
   return (
-    <TenantProvider>
-      <div className="flex h-screen bg-jsb-navy overflow-hidden">
+    <div className="flex h-screen bg-jsb-navy overflow-hidden">
         {/* Mobile overlay */}
         {mobileMenuOpen && (
           <div
@@ -91,6 +89,5 @@ export function Shell({ children }: ShellProps) {
         {/* Floating Settings Chat */}
         <SettingsChat />
       </div>
-    </TenantProvider>
   )
 }
