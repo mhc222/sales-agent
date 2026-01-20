@@ -34,7 +34,7 @@ function NewCampaignContent() {
 
   // Audience & Intent Signals
   const [audienceDescription, setAudienceDescription] = useState('')
-  const [intentSignals, setIntentSignals] = useState<string[]>([''])
+  const [intentSignalsText, setIntentSignalsText] = useState('')
   const [dataSourceType, setDataSourceType] = useState<'intent' | 'pixel' | 'apollo' | 'csv' | 'manual'>('intent')
 
   useEffect(() => {
@@ -73,20 +73,6 @@ function NewCampaignContent() {
     setSelectedBrand(brand)
   }, [brands])
 
-  const addIntentSignal = () => {
-    setIntentSignals([...intentSignals, ''])
-  }
-
-  const removeIntentSignal = (index: number) => {
-    setIntentSignals(intentSignals.filter((_, i) => i !== index))
-  }
-
-  const updateIntentSignal = (index: number, value: string) => {
-    const newSignals = [...intentSignals]
-    newSignals[index] = value
-    setIntentSignals(newSignals)
-  }
-
   // Navigation
   const currentStepIndex = STEPS.indexOf(currentStep)
   const canGoBack = currentStepIndex > 0
@@ -106,7 +92,7 @@ function NewCampaignContent() {
 
   // Validation for each step
   const isBasicsValid = brandId && name.trim()
-  const isAudienceValid = audienceDescription.trim() && intentSignals.some(s => s.trim())
+  const isAudienceValid = audienceDescription.trim() && intentSignalsText.trim()
 
   const canProceed = () => {
     switch (currentStep) {
@@ -133,9 +119,6 @@ function NewCampaignContent() {
           ? 'linkedin_only'
           : 'email_only'
 
-      // Filter out empty intent signals
-      const validIntentSignals = intentSignals.filter(s => s.trim())
-
       const res = await fetch('/api/campaigns', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -145,7 +128,7 @@ function NewCampaignContent() {
           mode: derivedMode,
           // Audience & Intent Signals
           target_persona: audienceDescription,
-          primary_angle: validIntentSignals.join('\n'),
+          primary_angle: intentSignalsText.trim(),
           // Data source type
           data_source_type: dataSourceType,
           auto_ingest: dataSourceType === 'intent' || dataSourceType === 'pixel',
@@ -395,44 +378,23 @@ function NewCampaignContent() {
 
               {/* Intent Signals */}
               <div>
-                <label className={cn(jsb.label, 'block mb-2')}>
+                <label htmlFor="intentSignals" className={cn(jsb.label, 'block mb-2')}>
                   Intent Signals <span className="text-red-400">*</span>
                 </label>
                 <p className="text-xs text-gray-500 mb-3">
-                  What signals indicate this prospect is ready? (e.g., visited pricing page, downloaded whitepaper, recent funding)
+                  What signals indicate this prospect is ready? Paste multiple signals, one per line.
                 </p>
-                <div className="space-y-3">
-                  {intentSignals.map((signal, index) => (
-                    <div key={index} className="flex gap-2">
-                      <input
-                        type="text"
-                        value={signal}
-                        onChange={(e) => updateIntentSignal(index, e.target.value)}
-                        placeholder={`Intent signal ${index + 1}`}
-                        className={cn(jsb.input, 'flex-1 px-4 py-3')}
-                      />
-                      {intentSignals.length > 1 && (
-                        <button
-                          type="button"
-                          onClick={() => removeIntentSignal(index)}
-                          className={cn(jsb.buttonGhost, 'px-3 py-3 text-red-400 hover:bg-red-500/10')}
-                          title="Remove signal"
-                        >
-                          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                          </svg>
-                        </button>
-                      )}
-                    </div>
-                  ))}
-                  <button
-                    type="button"
-                    onClick={addIntentSignal}
-                    className={cn(jsb.buttonGhost, 'px-4 py-2 text-sm')}
-                  >
-                    + Add Intent Signal
-                  </button>
-                </div>
+                <textarea
+                  id="intentSignals"
+                  value={intentSignalsText}
+                  onChange={(e) => setIntentSignalsText(e.target.value)}
+                  placeholder={`Visited pricing page\nDownloaded whitepaper\nRecent funding announcement\nJob posting for relevant role\nAttended webinar`}
+                  rows={8}
+                  className={cn(jsb.input, 'w-full px-4 py-3 resize-y font-mono text-sm')}
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  One signal per line
+                </p>
               </div>
             </div>
           )}
@@ -487,7 +449,7 @@ function NewCampaignContent() {
                     <div>
                       <span className="text-gray-500 text-sm">Intent Signals:</span>
                       <ul className="mt-1 space-y-1">
-                        {intentSignals.filter(s => s.trim()).map((signal, index) => (
+                        {intentSignalsText.split('\n').filter(s => s.trim()).map((signal, index) => (
                           <li key={index} className="text-white flex items-start gap-2">
                             <span className="text-jsb-pink mt-1">•</span>
                             <span>{signal}</span>
