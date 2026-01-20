@@ -1,57 +1,45 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { Shell } from '@/components/layout/Shell'
 import { jsb, cn } from '@/lib/styles'
 import DataSourceStep, { type DataSourceData } from '@/components/campaigns/wizard/DataSourceStep'
-import ChannelsStep, { type ChannelData } from '@/components/campaigns/wizard/ChannelsStep'
 import type { Brand } from '@/src/lib/brands'
-import type { TenantICP } from '@/src/lib/tenant-settings'
+import type { ICPPersona } from '@/src/lib/tenant-settings'
 import type { CampaignMode } from '@/src/lib/orchestration/types'
 
-// Steps in the wizard
-const STEPS = ['basics', 'dataSource', 'channels', 'review'] as const
+// Simplified steps - no channels (inherited from brand)
+const STEPS = ['basics', 'intent', 'dataSource', 'review'] as const
 type Step = (typeof STEPS)[number]
 
 const stepLabels: Record<Step, string> = {
-  basics: 'Basics',
+  basics: 'Campaign Details',
+  intent: 'Campaign Focus',
   dataSource: 'Data Source',
-  channels: 'Channels',
-  review: 'Review',
-}
-
-interface TenantConfig {
-  hasSmartlead: boolean
-  hasHeyreach: boolean
+  review: 'Review & Create',
 }
 
 export default function NewCampaignPage() {
   const router = useRouter()
+  const searchParams = useSearchParams()
   const [currentStep, setCurrentStep] = useState<Step>('basics')
   const [brands, setBrands] = useState<Brand[]>([])
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [tenantConfig, setTenantConfig] = useState<TenantConfig>({
-    hasSmartlead: false,
-    hasHeyreach: false,
-  })
 
   // Form state - Basics
   const [brandId, setBrandId] = useState('')
   const [selectedBrand, setSelectedBrand] = useState<Brand | null>(null)
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
-  const [customInstructions, setCustomInstructions] = useState('')
+
+  // Form state - Intent/Targeting
   const [targetPersona, setTargetPersona] = useState('')
   const [primaryAngle, setPrimaryAngle] = useState('')
-  const [emailCount, setEmailCount] = useState(7)
-  const [linkedinCount, setLinkedinCount] = useState(4)
-  const [linkedinFirst, setLinkedinFirst] = useState(false)
-  const [waitForConnection, setWaitForConnection] = useState(true)
-  const [connectionTimeoutHours, setConnectionTimeoutHours] = useState(72)
+  const [customInstructions, setCustomInstructions] = useState('')
 
   // Form state - Data Source
   const [dataSource, setDataSource] = useState<DataSourceData>({
@@ -60,46 +48,31 @@ export default function NewCampaignPage() {
     autoIngest: false,
   })
 
-  // Form state - Channels
-  const [channels, setChannels] = useState<ChannelData>({
-    channels: ['email'],
-    smartleadCampaignId: '',
-    heyreachCampaignId: '',
-  })
-
   useEffect(() => {
     fetchData()
   }, [])
 
   const fetchData = async () => {
     try {
-      // Fetch brands and tenant config in parallel
-      const [brandsRes, settingsRes] = await Promise.all([
-        fetch('/api/brands'),
-        fetch('/api/settings'),
-      ])
+      const res = await fetch('/api/brands')
+      const data = await res.json()
 
-      const brandsData = await brandsRes.json()
-      const settingsData = await settingsRes.json()
+      if (res.ok) {
+        console.log('[Campaign New] Brands fetched:', data.brands?.length)
+        setBrands(data.brands || [])
 
-      if (brandsRes.ok) {
-        console.log('[Campaign New] Brands fetched:', brandsData.brands?.length)
-        setBrands(brandsData.brands || [])
-        if (brandsData.brands?.length > 0) {
-          setBrandId(brandsData.brands[0].id)
-          setSelectedBrand(brandsData.brands[0])
+        // Check if brand is pre-selected from query params
+        const preSelectedBrandId = searchParams.get('brand')
+        if (preSelectedBrandId && data.brands?.find((b: Brand) => b.id === preSelectedBrandId)) {
+          setBrandId(preSelectedBrandId)
+          setSelectedBrand(data.brands.find((b: Brand) => b.id === preSelectedBrandId))
+        } else if (data.brands?.length > 0) {
+          setBrandId(data.brands[0].id)
+          setSelectedBrand(data.brands[0])
         }
       } else {
-        console.error('[Campaign New] Brands fetch failed:', brandsData)
-        setError(`Failed to load brands: ${brandsData.error || 'Unknown error'}`)
-      }
-
-      if (settingsRes.ok && settingsData.settings) {
-        const integrations = settingsData.settings.integrations || {}
-        setTenantConfig({
-          hasSmartlead: !!integrations.smartlead?.api_key,
-          hasHeyreach: !!integrations.heyreach?.api_key,
-        })
+        console.error('[Campaign New] Brands fetch failed:', data)
+        setError(`Failed to load brands: ${data.error || 'Unknown error'}`)
       }
     } catch (err) {
       console.error('Failed to load data:', err)
@@ -113,6 +86,8 @@ export default function NewCampaignPage() {
     setBrandId(newBrandId)
     const brand = brands.find((b) => b.id === newBrandId) || null
     setSelectedBrand(brand)
+    // Reset persona selection when brand changes
+    setTargetPersona('')
   }, [brands])
 
   // Navigation
@@ -134,17 +109,33 @@ export default function NewCampaignPage() {
 
   // Validation for each step
   const isBasicsValid = brandId && name.trim()
+  const isIntentValid = true // Optional fields
+  const isDataSourceValid = dataSource.type !== ''
+
+  const canProceed = () => {
+    switch (currentStep) {
+      case 'basics':
+        return isBasicsValid
+      case 'intent':
+        return isIntentValid
+      case 'dataSource':
+        return isDataSourceValid
+      default:
+        return true
+    }
+  }
 
   const handleSubmit = async () => {
     setError(null)
     setSubmitting(true)
 
     try {
-      // Derive mode from channel selection
+      // Derive mode from brand's enabled channels
+      const brandChannels = selectedBrand?.settings?.enabled_channels || ['email']
       const derivedMode: CampaignMode =
-        channels.channels.includes('email') && channels.channels.includes('linkedin')
+        brandChannels.includes('email') && brandChannels.includes('linkedin')
           ? 'multi_channel'
-          : channels.channels.includes('linkedin')
+          : brandChannels.includes('linkedin')
           ? 'linkedin_only'
           : 'email_only'
 
@@ -159,14 +150,8 @@ export default function NewCampaignPage() {
           custom_instructions: customInstructions || undefined,
           target_persona: targetPersona || undefined,
           primary_angle: primaryAngle || undefined,
-          email_count: emailCount,
-          linkedin_count: linkedinCount,
-          linkedin_first: linkedinFirst,
-          wait_for_connection: waitForConnection,
-          connection_timeout_hours: connectionTimeoutHours,
-          smartlead_campaign_id: channels.smartleadCampaignId || undefined,
-          heyreach_campaign_id: channels.heyreachCampaignId || undefined,
-          // New data source fields
+          // Channels and integrations inherited from brand
+          // Data source configuration
           data_source_type: dataSource.type || undefined,
           data_source_config: dataSource.config,
           auto_ingest: dataSource.autoIngest,
@@ -246,7 +231,7 @@ export default function NewCampaignPage() {
           </Link>
           <div>
             <h1 className={cn(jsb.heading, 'text-2xl')}>New Campaign</h1>
-            <p className={jsb.subheading}>Create a new outreach campaign</p>
+            <p className={jsb.subheading}>Campaigns inherit channels and integrations from their brand</p>
           </div>
         </div>
 
@@ -294,22 +279,26 @@ export default function NewCampaignPage() {
 
         {/* Step Content */}
         <div className={cn(jsb.card, 'p-6')}>
-          {/* Step 1: Basics */}
+          {/* Step 1: Campaign Details */}
           {currentStep === 'basics' && (
             <div className="space-y-6">
               <div>
-                <h2 className={cn(jsb.heading, 'text-xl mb-2')}>Campaign Basics</h2>
-                <p className="text-gray-400">Name your campaign and select a brand</p>
+                <h2 className={cn(jsb.heading, 'text-xl mb-2')}>Campaign Details</h2>
+                <p className={jsb.subheading}>
+                  Choose a brand and name your campaign
+                </p>
               </div>
 
               {/* Brand Selection */}
               <div>
-                <label className={cn(jsb.label, 'block mb-2')}>Brand *</label>
+                <label htmlFor="brand" className={cn(jsb.label, 'block mb-2')}>
+                  Brand <span className="text-red-400">*</span>
+                </label>
                 <select
+                  id="brand"
                   value={brandId}
                   onChange={(e) => handleBrandChange(e.target.value)}
-                  className={cn(jsb.select, 'w-full px-3 py-2')}
-                  required
+                  className={cn(jsb.input, 'w-full px-4 py-3')}
                 >
                   {brands.map((brand) => (
                     <option key={brand.id} value={brand.id}>
@@ -317,123 +306,133 @@ export default function NewCampaignPage() {
                     </option>
                   ))}
                 </select>
-
-                {/* Show inherited ICP */}
-                {selectedBrand?.icp && (
-                  <div className={cn(jsb.card, 'p-3 mt-3 bg-emerald-500/10 border-emerald-500/30')}>
-                    <div className="flex items-center gap-2 text-emerald-400 text-sm">
-                      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                      </svg>
-                      ICP inherited from brand
-                      {selectedBrand.icp.personas?.length && (
-                        <span className="text-gray-400">({selectedBrand.icp.personas.length} personas)</span>
-                      )}
-                    </div>
-                  </div>
+                {selectedBrand && (
+                  <p className="text-xs text-gray-500 mt-1">
+                    Channels: {selectedBrand.settings?.enabled_channels?.join(', ') || 'email'}
+                  </p>
                 )}
               </div>
 
               {/* Campaign Name */}
               <div>
-                <label className={cn(jsb.label, 'block mb-2')}>Campaign Name *</label>
+                <label htmlFor="name" className={cn(jsb.label, 'block mb-2')}>
+                  Campaign Name <span className="text-red-400">*</span>
+                </label>
                 <input
+                  id="name"
                   type="text"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
+                  placeholder="Q1 2025 Outreach"
                   className={cn(jsb.input, 'w-full px-4 py-3')}
-                  placeholder="e.g., Q1 SaaS Outreach"
-                  required
+                  autoFocus
                 />
               </div>
 
               {/* Description */}
               <div>
-                <label className={cn(jsb.label, 'block mb-2')}>Description</label>
+                <label htmlFor="description" className={cn(jsb.label, 'block mb-2')}>
+                  Description <span className="text-gray-500 text-xs">(optional)</span>
+                </label>
                 <textarea
+                  id="description"
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
-                  className={cn(jsb.input, 'w-full px-4 py-3')}
-                  rows={2}
-                  placeholder="Brief description of this campaign"
-                />
-              </div>
-
-              {/* Targeting */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className={cn(jsb.label, 'block mb-2')}>Target Persona</label>
-                  <input
-                    type="text"
-                    value={targetPersona}
-                    onChange={(e) => setTargetPersona(e.target.value)}
-                    className={cn(jsb.input, 'w-full px-4 py-3')}
-                    placeholder="e.g., VP of Marketing"
-                  />
-                </div>
-                <div>
-                  <label className={cn(jsb.label, 'block mb-2')}>Primary Angle</label>
-                  <input
-                    type="text"
-                    value={primaryAngle}
-                    onChange={(e) => setPrimaryAngle(e.target.value)}
-                    className={cn(jsb.input, 'w-full px-4 py-3')}
-                    placeholder="e.g., Cost reduction"
-                  />
-                </div>
-              </div>
-
-              {/* Custom Instructions */}
-              <div>
-                <label className={cn(jsb.label, 'block mb-2')}>Custom Instructions</label>
-                <textarea
-                  value={customInstructions}
-                  onChange={(e) => setCustomInstructions(e.target.value)}
-                  className={cn(jsb.input, 'w-full px-4 py-3')}
+                  placeholder="Brief description of this campaign's goals..."
                   rows={3}
-                  placeholder="e.g., Focus on ROI messaging. Keep emails under 100 words."
+                  className={cn(jsb.input, 'w-full px-4 py-3 resize-y')}
                 />
-                <p className="text-xs text-gray-500 mt-1">
-                  These override brand-level defaults for AI generation
-                </p>
-              </div>
-
-              {/* Navigation */}
-              <div className="flex gap-3 pt-4">
-                <Link href="/campaigns" className={cn(jsb.buttonSecondary, 'px-6 py-3')}>
-                  Cancel
-                </Link>
-                <button
-                  onClick={goNext}
-                  disabled={!isBasicsValid}
-                  className={cn(jsb.buttonPrimary, 'flex-1 py-3')}
-                >
-                  Continue
-                </button>
               </div>
             </div>
           )}
 
-          {/* Step 2: Data Source */}
+          {/* Step 2: Campaign Intent/Focus */}
+          {currentStep === 'intent' && (
+            <div className="space-y-6">
+              <div>
+                <h2 className={cn(jsb.heading, 'text-xl mb-2')}>Campaign Focus</h2>
+                <p className={jsb.subheading}>
+                  Define the targeting and messaging for this campaign
+                </p>
+              </div>
+
+              {/* Target Persona */}
+              <div>
+                <label htmlFor="targetPersona" className={cn(jsb.label, 'block mb-2')}>
+                  Target Persona <span className="text-gray-500 text-xs">(optional)</span>
+                </label>
+                {selectedBrand?.icp?.personas && selectedBrand.icp.personas.length > 0 ? (
+                  <select
+                    id="targetPersona"
+                    value={targetPersona}
+                    onChange={(e) => setTargetPersona(e.target.value)}
+                    className={cn(jsb.input, 'w-full px-4 py-3')}
+                  >
+                    <option value="">All personas</option>
+                    {selectedBrand.icp.personas.map((persona: ICPPersona, index: number) => (
+                      <option key={index} value={persona.title}>
+                        {persona.title} - {persona.seniority_level}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    id="targetPersona"
+                    type="text"
+                    value={targetPersona}
+                    onChange={(e) => setTargetPersona(e.target.value)}
+                    placeholder="e.g., CFOs at mid-market companies"
+                    className={cn(jsb.input, 'w-full px-4 py-3')}
+                  />
+                )}
+                <p className="text-xs text-gray-500 mt-1">
+                  Who specifically are you targeting in this campaign?
+                </p>
+              </div>
+
+              {/* Primary Angle */}
+              <div>
+                <label htmlFor="primaryAngle" className={cn(jsb.label, 'block mb-2')}>
+                  Primary Messaging Angle <span className="text-gray-500 text-xs">(optional)</span>
+                </label>
+                <textarea
+                  id="primaryAngle"
+                  value={primaryAngle}
+                  onChange={(e) => setPrimaryAngle(e.target.value)}
+                  placeholder="e.g., Cost reduction through automation, Security compliance for healthcare, etc."
+                  rows={3}
+                  className={cn(jsb.input, 'w-full px-4 py-3 resize-y')}
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  What's the main value proposition or angle for this campaign?
+                </p>
+              </div>
+
+              {/* Custom Instructions */}
+              <div>
+                <label htmlFor="customInstructions" className={cn(jsb.label, 'block mb-2')}>
+                  Custom Instructions <span className="text-gray-500 text-xs">(optional)</span>
+                </label>
+                <textarea
+                  id="customInstructions"
+                  value={customInstructions}
+                  onChange={(e) => setCustomInstructions(e.target.value)}
+                  placeholder="Any specific instructions for AI-generated content in this campaign..."
+                  rows={4}
+                  className={cn(jsb.input, 'w-full px-4 py-3 resize-y')}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Step 3: Data Source */}
           {currentStep === 'dataSource' && (
             <DataSourceStep
               data={dataSource}
-              brandIcp={selectedBrand?.icp as TenantICP | null}
               onChange={setDataSource}
               onNext={goNext}
               onBack={goBack}
-            />
-          )}
-
-          {/* Step 3: Channels */}
-          {currentStep === 'channels' && (
-            <ChannelsStep
-              data={channels}
-              hasSmartlead={tenantConfig.hasSmartlead}
-              hasHeyreach={tenantConfig.hasHeyreach}
-              onChange={setChannels}
-              onNext={goNext}
-              onBack={goBack}
+              hideNavigation={true}
             />
           )}
 
@@ -441,104 +440,118 @@ export default function NewCampaignPage() {
           {currentStep === 'review' && (
             <div className="space-y-6">
               <div>
-                <h2 className={cn(jsb.heading, 'text-xl mb-2')}>Review Campaign</h2>
-                <p className="text-gray-400">Confirm your campaign settings before creating</p>
+                <h2 className={cn(jsb.heading, 'text-xl mb-2')}>Review & Create</h2>
+                <p className={jsb.subheading}>
+                  Review your campaign settings before creating
+                </p>
               </div>
 
               {/* Summary Cards */}
               <div className="space-y-4">
-                {/* Basics Summary */}
+                {/* Brand & Details */}
                 <div className={cn(jsb.card, 'p-4 bg-jsb-navy-lighter/50')}>
-                  <h3 className={cn(jsb.heading, 'text-sm mb-3 flex items-center gap-2')}>
-                    <span className="w-6 h-6 rounded-full bg-jsb-pink/20 text-jsb-pink flex items-center justify-center text-xs">1</span>
-                    Basics
-                  </h3>
-                  <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
-                    <dt className="text-gray-500">Name:</dt>
-                    <dd className="text-white">{name}</dd>
-                    <dt className="text-gray-500">Brand:</dt>
-                    <dd className="text-white">{selectedBrand?.name}</dd>
+                  <h3 className="text-sm font-medium text-gray-400 mb-3">Campaign Details</h3>
+                  <div className="space-y-2">
+                    <div className="flex justify-between">
+                      <span className="text-gray-500">Brand:</span>
+                      <span className="text-white">{selectedBrand?.name}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-500">Name:</span>
+                      <span className="text-white">{name}</span>
+                    </div>
+                    {description && (
+                      <div className="flex justify-between">
+                        <span className="text-gray-500">Description:</span>
+                        <span className="text-white text-sm">{description}</span>
+                      </div>
+                    )}
+                    <div className="flex justify-between">
+                      <span className="text-gray-500">Channels:</span>
+                      <span className="text-white capitalize">
+                        {selectedBrand?.settings?.enabled_channels?.join(', ') || 'email'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Intent/Focus */}
+                <div className={cn(jsb.card, 'p-4 bg-jsb-navy-lighter/50')}>
+                  <h3 className="text-sm font-medium text-gray-400 mb-3">Campaign Focus</h3>
+                  <div className="space-y-2">
                     {targetPersona && (
-                      <>
-                        <dt className="text-gray-500">Target:</dt>
-                        <dd className="text-white">{targetPersona}</dd>
-                      </>
+                      <div className="flex justify-between">
+                        <span className="text-gray-500">Target Persona:</span>
+                        <span className="text-white">{targetPersona}</span>
+                      </div>
                     )}
                     {primaryAngle && (
-                      <>
-                        <dt className="text-gray-500">Angle:</dt>
-                        <dd className="text-white">{primaryAngle}</dd>
-                      </>
+                      <div className="flex justify-between">
+                        <span className="text-gray-500">Primary Angle:</span>
+                        <span className="text-white text-sm">{primaryAngle}</span>
+                      </div>
                     )}
-                  </dl>
+                    {!targetPersona && !primaryAngle && (
+                      <p className="text-gray-500 text-sm">Using brand defaults</p>
+                    )}
+                  </div>
                 </div>
 
-                {/* Data Source Summary */}
+                {/* Data Source */}
                 <div className={cn(jsb.card, 'p-4 bg-jsb-navy-lighter/50')}>
-                  <h3 className={cn(jsb.heading, 'text-sm mb-3 flex items-center gap-2')}>
-                    <span className="w-6 h-6 rounded-full bg-jsb-pink/20 text-jsb-pink flex items-center justify-center text-xs">2</span>
-                    Data Source
-                  </h3>
-                  <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
-                    <dt className="text-gray-500">Type:</dt>
-                    <dd className="text-white capitalize">{dataSource.type || 'Not selected'}</dd>
-                    <dt className="text-gray-500">Auto-ingest:</dt>
-                    <dd className="text-white">{dataSource.autoIngest ? 'Enabled' : 'Disabled'}</dd>
-                  </dl>
+                  <h3 className="text-sm font-medium text-gray-400 mb-3">Data Source</h3>
+                  <div className="space-y-2">
+                    <div className="flex justify-between">
+                      <span className="text-gray-500">Type:</span>
+                      <span className="text-white capitalize">{dataSource.type}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-500">Auto-ingest:</span>
+                      <span className="text-white">{dataSource.autoIngest ? 'Enabled' : 'Disabled'}</span>
+                    </div>
+                  </div>
                 </div>
-
-                {/* Channels Summary */}
-                <div className={cn(jsb.card, 'p-4 bg-jsb-navy-lighter/50')}>
-                  <h3 className={cn(jsb.heading, 'text-sm mb-3 flex items-center gap-2')}>
-                    <span className="w-6 h-6 rounded-full bg-jsb-pink/20 text-jsb-pink flex items-center justify-center text-xs">3</span>
-                    Channels
-                  </h3>
-                  <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
-                    <dt className="text-gray-500">Channels:</dt>
-                    <dd className="text-white">
-                      {channels.channels.map((c) => (c === 'email' ? 'Email' : 'LinkedIn')).join(', ')}
-                    </dd>
-                    {channels.channels.includes('email') && channels.smartleadCampaignId && (
-                      <>
-                        <dt className="text-gray-500">SmartLead ID:</dt>
-                        <dd className="text-white">{channels.smartleadCampaignId}</dd>
-                      </>
-                    )}
-                    {channels.channels.includes('linkedin') && channels.heyreachCampaignId && (
-                      <>
-                        <dt className="text-gray-500">HeyReach ID:</dt>
-                        <dd className="text-white">{channels.heyreachCampaignId}</dd>
-                      </>
-                    )}
-                  </dl>
-                </div>
-              </div>
-
-              {/* Navigation */}
-              <div className="flex gap-3 pt-4">
-                <button onClick={goBack} className={cn(jsb.buttonSecondary, 'px-6 py-3')}>
-                  Back
-                </button>
-                <button
-                  onClick={handleSubmit}
-                  disabled={submitting}
-                  className={cn(jsb.buttonPrimary, 'flex-1 py-3')}
-                >
-                  {submitting ? (
-                    <span className="flex items-center justify-center gap-2">
-                      <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                      </svg>
-                      Creating...
-                    </span>
-                  ) : (
-                    'Create Campaign'
-                  )}
-                </button>
               </div>
             </div>
           )}
+
+          {/* Navigation Buttons */}
+          <div className="flex gap-3 mt-8 pt-6 border-t border-jsb-navy-lighter">
+            {canGoBack && (
+              <button
+                onClick={goBack}
+                className={cn(jsb.buttonGhost, 'px-6 py-3')}
+              >
+                Back
+              </button>
+            )}
+
+            {currentStep === 'review' ? (
+              <button
+                onClick={handleSubmit}
+                disabled={submitting}
+                className={cn(
+                  jsb.buttonPrimary,
+                  'flex-1 py-3',
+                  submitting && 'opacity-50 cursor-not-allowed'
+                )}
+              >
+                {submitting ? 'Creating Campaign...' : 'Create Campaign'}
+              </button>
+            ) : (
+              <button
+                onClick={goNext}
+                disabled={!canProceed()}
+                className={cn(
+                  jsb.buttonPrimary,
+                  'flex-1 py-3',
+                  !canProceed() && 'opacity-50 cursor-not-allowed'
+                )}
+              >
+                Continue
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </Shell>

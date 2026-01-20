@@ -14,12 +14,12 @@ export async function GET(request: NextRequest) {
     if (!error) {
       // Check if this is a password recovery
       if (type === 'recovery') {
-        // Redirect to password update page (could add later)
+        // Redirect to password update page
         return NextResponse.redirect(new URL('/account', request.url))
       }
 
-      // Always redirect to account page - it will show brands and let user choose
-      return NextResponse.redirect(new URL('/account', request.url))
+      // Redirect to dashboard - users can create brands from there
+      return NextResponse.redirect(new URL('/dashboard', request.url))
     }
   }
 

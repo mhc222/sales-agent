@@ -2,8 +2,6 @@ import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
 const PUBLIC_ROUTES = ['/login', '/signup', '/forgot-password', '/auth/callback']
-const ACCOUNT_ROUTE = '/account'
-const ONBOARDING_ROUTE = '/onboarding'
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
@@ -67,30 +65,8 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(loginUrl)
   }
 
-  // Allow account and onboarding routes for authenticated users
-  if (pathname.startsWith(ACCOUNT_ROUTE) || pathname.startsWith(ONBOARDING_ROUTE)) {
-    return response
-  }
-
-  // For ALL other routes, check if user has a completed brand
-  // If not, always redirect to /account
-  const { data: userTenants } = await supabase
-    .from('user_tenants')
-    .select('tenant:tenants(settings)')
-    .eq('user_id', user.id)
-
-  // Check if any tenant has completed onboarding
-  const hasCompletedBrand = (userTenants || []).some((ut) => {
-    const tenant = Array.isArray(ut.tenant) ? ut.tenant[0] : ut.tenant
-    const settings = tenant?.settings as Record<string, unknown> | undefined
-    return settings?.onboarding_completed === true
-  })
-
-  // If no completed brands, redirect to account page
-  if (!hasCompletedBrand) {
-    return NextResponse.redirect(new URL('/account', request.url))
-  }
-
+  // Authenticated users can access all routes
+  // No forced onboarding - users go directly to dashboard
   return response
 }
 

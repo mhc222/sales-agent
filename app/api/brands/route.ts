@@ -83,7 +83,7 @@ export async function GET(request: NextRequest) {
 
 /**
  * POST /api/brands
- * Create a new brand
+ * Create a new brand with full wizard data (settings, ICP, integrations)
  */
 export async function POST(request: NextRequest) {
   try {
@@ -94,50 +94,129 @@ export async function POST(request: NextRequest) {
 
     const body = await request.json()
     const {
+      brandInfo,
+      llm,
+      icp,
+      channels,
+      emailProvider,
+      linkedIn,
+      crm,
+      dnc,
+      // Legacy format support
       name,
       description,
       website,
       logo_url,
-      voice_tone,
-      value_proposition,
-      key_differentiators,
-      target_industries,
-      target_titles,
-      company_size,
-      founded_year,
-      headquarters,
     } = body
 
-    if (!name) {
-      return NextResponse.json({ error: 'name is required' }, { status: 400 })
+    // Support both wizard format and legacy format
+    const brandName = brandInfo?.name || name
+    const brandDescription = brandInfo?.description || description
+    const brandWebsite = brandInfo?.website || website
+    const brandLogoUrl = brandInfo?.logoUrl || logo_url
+
+    if (!brandName) {
+      return NextResponse.json({ error: 'Brand name is required' }, { status: 400 })
     }
 
-    const { data, error } = await supabase
+    // Build settings object if wizard data provided
+    let settings = {}
+    if (llm || channels || emailProvider || linkedIn || crm) {
+      const integrations: Record<string, unknown> = {}
+
+      // Email provider
+      if (channels?.outreachChannels?.includes('email') && emailProvider?.provider) {
+        integrations[emailProvider.provider] = {
+          api_key: emailProvider.apiKey,
+          campaign_id: emailProvider.campaignId || undefined,
+        }
+      }
+
+      // LinkedIn provider
+      if (channels?.outreachChannels?.includes('linkedin') && linkedIn?.provider && !linkedIn?.skip) {
+        integrations[linkedIn.provider] = {
+          api_key: linkedIn.apiKey,
+        }
+      }
+
+      // CRM integration
+      if (crm?.provider && !crm?.skip) {
+        integrations[crm.provider] = {
+          api_key: crm.apiKey,
+          location_id: crm.locationId || undefined,
+        }
+      }
+
+      settings = {
+        integrations,
+        llm_provider: llm?.provider || null,
+        llm_config: llm?.provider ? {
+          api_key: llm.apiKey,
+          model: llm.model || undefined,
+        } : null,
+        active_email_provider: emailProvider?.provider || null,
+        active_linkedin_provider: linkedIn?.provider || null,
+        enabled_channels: channels?.outreachChannels || ['email'],
+        research_sources: ['apollo', 'perplexity', 'linkedin'],
+      }
+    }
+
+    // Build ICP object if provided
+    let icpData = null
+    if (icp?.accountCriteria || icp?.personas?.length || icp?.triggers?.length) {
+      icpData = {
+        account_criteria: icp.accountCriteria || null,
+        personas: icp.personas || [],
+        triggers: icp.triggers || [],
+        market_research: icp.marketResearch || '',
+      }
+    }
+
+    // Create the brand
+    const { data: brand, error: brandError } = await supabase
       .from('brands')
       .insert({
         tenant_id: tenantId,
-        name,
-        description,
-        website,
-        logo_url,
-        voice_tone: voice_tone || 'professional',
-        value_proposition,
-        key_differentiators,
-        target_industries,
-        target_titles,
-        company_size,
-        founded_year,
-        headquarters,
+        name: brandName,
+        description: brandDescription,
+        website: brandWebsite,
+        logo_url: brandLogoUrl,
+        voice_tone: 'professional',
+        settings: Object.keys(settings).length > 0 ? settings : null,
+        icp: icpData,
+        icp_source_url: brandWebsite,
+        icp_research_completed_at: icpData ? new Date().toISOString() : null,
+        setup_completed: Boolean(llm && icp?.accountCriteria),
       })
       .select()
       .single()
 
-    if (error) {
-      console.error('[Brands API] Create error:', error)
-      return NextResponse.json({ error: error.message }, { status: 500 })
+    if (brandError) {
+      console.error('[Brands API] Create error:', brandError)
+      return NextResponse.json({ error: brandError.message }, { status: 500 })
     }
 
-    return NextResponse.json({ brand: data }, { status: 201 })
+    // Handle DNC entries if provided
+    if (dnc?.entries?.length > 0 && !dnc.skip) {
+      const dncInserts = dnc.entries.map((entry: { type: string; value: string }) => ({
+        tenant_id: tenantId,
+        brand_id: brand.id,
+        email: entry.type === 'email' ? entry.value : null,
+        domain: entry.type === 'domain' ? entry.value : null,
+        reason: 'Added during brand setup',
+      }))
+
+      const { error: dncError } = await supabase
+        .from('do_not_contact')
+        .insert(dncInserts)
+
+      if (dncError) {
+        console.error('[Brands API] DNC insert error:', dncError)
+        // Don't fail the whole operation if DNC insert fails
+      }
+    }
+
+    return NextResponse.json({ brand }, { status: 201 })
   } catch (error) {
     console.error('[Brands API] Error:', error)
     return NextResponse.json(

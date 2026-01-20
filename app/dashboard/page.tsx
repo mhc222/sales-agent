@@ -106,13 +106,26 @@ export default function DashboardPage() {
   const [data, setData] = useState<DashboardData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [hasBrands, setHasBrands] = useState(true)
 
   useEffect(() => {
-    fetchDashboardData()
+    checkBrandsAndFetchData()
   }, [])
 
-  async function fetchDashboardData() {
+  async function checkBrandsAndFetchData() {
     try {
+      // First check if user has any brands
+      const brandsRes = await fetch('/api/brands')
+      if (!brandsRes.ok) throw new Error('Failed to fetch brands')
+      const brandsData = await brandsRes.json()
+
+      if (!brandsData.brands || brandsData.brands.length === 0) {
+        setHasBrands(false)
+        setLoading(false)
+        return
+      }
+
+      // If brands exist, fetch dashboard stats
       const res = await fetch('/api/dashboard/stats')
       if (!res.ok) throw new Error('Failed to fetch dashboard data')
       const json = await res.json()
@@ -133,12 +146,63 @@ export default function DashboardPage() {
       <div className="flex flex-col items-center justify-center py-12">
         <p className="text-red-400">{error}</p>
         <button
-          onClick={() => { setLoading(true); setError(null); fetchDashboardData() }}
+          onClick={() => { setLoading(true); setError(null); checkBrandsAndFetchData() }}
           className="mt-4 px-4 py-2 bg-jsb-pink text-white rounded-md hover:bg-jsb-pink-hover"
         >
           Retry
         </button>
       </div>
+    )
+  }
+
+  // Show empty state if no brands exist
+  if (!hasBrands) {
+    return (
+      <Shell>
+        <div className="flex items-center justify-center min-h-[60vh]">
+          <div className="max-w-2xl mx-auto text-center p-8">
+            <div className="w-20 h-20 mx-auto mb-6 rounded-full bg-jsb-pink/10 flex items-center justify-center">
+              <svg
+                className="w-10 h-10 text-jsb-pink"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"
+                />
+              </svg>
+            </div>
+            <h2 className="text-3xl font-bold text-white mb-4">Welcome to your dashboard!</h2>
+            <p className="text-gray-400 text-lg mb-8">
+              Create your first brand to get started with campaigns. Each brand has its own ICP,
+              integrations, and messaging.
+            </p>
+            <Link
+              href="/brands/new"
+              className="inline-flex items-center gap-2 px-8 py-4 bg-jsb-pink text-white rounded-lg hover:bg-jsb-pink-hover transition-colors text-lg font-medium"
+            >
+              <svg
+                className="w-5 h-5"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M12 6v6m0 0v6m0-6h6m-6 0H6"
+                />
+              </svg>
+              Create Your First Brand
+            </Link>
+          </div>
+        </div>
+      </Shell>
     )
   }
 
@@ -159,7 +223,7 @@ export default function DashboardPage() {
           <p className="text-sm text-gray-400 mt-1">Pipeline overview and recent activity</p>
         </div>
         <button
-          onClick={() => { setLoading(true); fetchDashboardData() }}
+          onClick={() => { setLoading(true); checkBrandsAndFetchData() }}
           className="flex items-center gap-2 px-3 py-2 bg-jsb-navy-lighter text-gray-300 rounded-md hover:bg-jsb-navy-light transition-colors"
         >
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
