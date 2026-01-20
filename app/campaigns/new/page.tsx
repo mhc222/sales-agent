@@ -10,8 +10,6 @@ import type { Brand } from '@/src/lib/brands'
 import type { ICPPersona } from '@/src/lib/tenant-settings'
 import type { CampaignMode } from '@/src/lib/orchestration/types'
 
-export const dynamic = 'force-dynamic'
-
 // Simplified steps - no channels (inherited from brand)
 const STEPS = ['basics', 'intent', 'dataSource', 'review'] as const
 type Step = (typeof STEPS)[number]
