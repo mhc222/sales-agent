@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, Suspense } from 'react'
-import { useRouter, useSearchParams } from 'next/navigation'
+import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { Shell } from '@/components/layout/Shell'
 import { jsb, cn } from '@/lib/styles'
@@ -23,7 +23,6 @@ const stepLabels: Record<Step, string> = {
 
 function NewCampaignContent() {
   const router = useRouter()
-  const searchParams = useSearchParams()
   const [currentStep, setCurrentStep] = useState<Step>('basics')
   const [brands, setBrands] = useState<Brand[]>([])
   const [loading, setLoading] = useState(true)
@@ -61,12 +60,8 @@ function NewCampaignContent() {
         console.log('[Campaign New] Brands fetched:', data.brands?.length)
         setBrands(data.brands || [])
 
-        // Check if brand is pre-selected from query params
-        const preSelectedBrandId = searchParams.get('brand')
-        if (preSelectedBrandId && data.brands?.find((b: Brand) => b.id === preSelectedBrandId)) {
-          setBrandId(preSelectedBrandId)
-          setSelectedBrand(data.brands.find((b: Brand) => b.id === preSelectedBrandId))
-        } else if (data.brands?.length > 0) {
+        // Auto-select first brand
+        if (data.brands?.length > 0) {
           setBrandId(data.brands[0].id)
           setSelectedBrand(data.brands[0])
         }
