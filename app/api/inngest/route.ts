@@ -27,7 +27,12 @@ import {
   cronApolloSavedSearches,
   cronNureplySync,
   cronHeyReachSync,
+  cronCampaignDataIngestion,
 } from '../../../inngest/cron-jobs'
+import {
+  campaignIngestion,
+  manualCampaignIngestion,
+} from '../../../inngest/workflow0-campaign-ingestion'
 
 // Determine if we're in development mode
 const isDev = process.env.NODE_ENV === 'development'
@@ -64,6 +69,10 @@ export const { GET, POST, PUT } = serve({
     cronApolloSavedSearches,     // Cron: Apollo saved searches (11am UTC)
     cronNureplySync,             // Cron: Nureply engagement polling (every 15 min)
     cronHeyReachSync,            // Cron: HeyReach LinkedIn polling (every 15 min)
+    // Campaign-centric ingestion (new architecture)
+    cronCampaignDataIngestion,   // Cron: Campaign data ingestion (6am UTC)
+    campaignIngestion,           // Workflow 0: Campaign-based data ingestion
+    manualCampaignIngestion,     // Manual trigger for campaign ingestion
   ],
   // In dev mode, don't use signing key (handled by Inngest dev server)
   ...(isDev ? {} : {

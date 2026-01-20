@@ -1,49 +1,49 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { Shell } from '@/components/layout/Shell'
-import { jsb, cn, badgeColors } from '@/lib/styles'
+import { jsb, cn } from '@/lib/styles'
+import DataSourceStep, { type DataSourceData } from '@/components/campaigns/wizard/DataSourceStep'
+import ChannelsStep, { type ChannelData } from '@/components/campaigns/wizard/ChannelsStep'
+import type { Brand } from '@/src/lib/brands'
+import type { TenantICP } from '@/src/lib/tenant-settings'
+import type { CampaignMode } from '@/src/lib/orchestration/types'
 
-interface Brand {
-  id: string
-  name: string
-  description?: string
+// Steps in the wizard
+const STEPS = ['basics', 'dataSource', 'channels', 'review'] as const
+type Step = (typeof STEPS)[number]
+
+const stepLabels: Record<Step, string> = {
+  basics: 'Basics',
+  dataSource: 'Data Source',
+  channels: 'Channels',
+  review: 'Review',
 }
 
-type CampaignMode = 'email_only' | 'linkedin_only' | 'multi_channel'
-
-const modeOptions: { value: CampaignMode; label: string; description: string }[] = [
-  {
-    value: 'email_only',
-    label: 'Email Only',
-    description: 'Reach prospects through personalized email sequences',
-  },
-  {
-    value: 'linkedin_only',
-    label: 'LinkedIn Only',
-    description: 'Connect and engage prospects on LinkedIn',
-  },
-  {
-    value: 'multi_channel',
-    label: 'Multi-Channel',
-    description: 'Combine email and LinkedIn for maximum engagement',
-  },
-]
+interface TenantConfig {
+  hasSmartlead: boolean
+  hasHeyreach: boolean
+}
 
 export default function NewCampaignPage() {
   const router = useRouter()
+  const [currentStep, setCurrentStep] = useState<Step>('basics')
   const [brands, setBrands] = useState<Brand[]>([])
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [tenantConfig, setTenantConfig] = useState<TenantConfig>({
+    hasSmartlead: false,
+    hasHeyreach: false,
+  })
 
-  // Form state
+  // Form state - Basics
   const [brandId, setBrandId] = useState('')
+  const [selectedBrand, setSelectedBrand] = useState<Brand | null>(null)
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
-  const [mode, setMode] = useState<CampaignMode>('email_only')
   const [customInstructions, setCustomInstructions] = useState('')
   const [targetPersona, setTargetPersona] = useState('')
   const [primaryAngle, setPrimaryAngle] = useState('')
@@ -52,36 +52,97 @@ export default function NewCampaignPage() {
   const [linkedinFirst, setLinkedinFirst] = useState(false)
   const [waitForConnection, setWaitForConnection] = useState(true)
   const [connectionTimeoutHours, setConnectionTimeoutHours] = useState(72)
-  const [smartleadCampaignId, setSmartleadCampaignId] = useState('')
-  const [heyreachCampaignId, setHeyreachCampaignId] = useState('')
+
+  // Form state - Data Source
+  const [dataSource, setDataSource] = useState<DataSourceData>({
+    type: '',
+    config: {},
+    autoIngest: false,
+  })
+
+  // Form state - Channels
+  const [channels, setChannels] = useState<ChannelData>({
+    channels: ['email'],
+    smartleadCampaignId: '',
+    heyreachCampaignId: '',
+  })
 
   useEffect(() => {
-    fetchBrands()
+    fetchData()
   }, [])
 
-  const fetchBrands = async () => {
+  const fetchData = async () => {
     try {
-      const res = await fetch('/api/brands')
-      const data = await res.json()
-      if (res.ok) {
-        setBrands(data.brands || [])
-        if (data.brands?.length > 0) {
-          setBrandId(data.brands[0].id)
+      // Fetch brands and tenant config in parallel
+      const [brandsRes, settingsRes] = await Promise.all([
+        fetch('/api/brands'),
+        fetch('/api/settings'),
+      ])
+
+      const brandsData = await brandsRes.json()
+      const settingsData = await settingsRes.json()
+
+      if (brandsRes.ok) {
+        setBrands(brandsData.brands || [])
+        if (brandsData.brands?.length > 0) {
+          setBrandId(brandsData.brands[0].id)
+          setSelectedBrand(brandsData.brands[0])
         }
       }
+
+      if (settingsRes.ok && settingsData.settings) {
+        const integrations = settingsData.settings.integrations || {}
+        setTenantConfig({
+          hasSmartlead: !!integrations.smartlead?.api_key,
+          hasHeyreach: !!integrations.heyreach?.api_key,
+        })
+      }
     } catch (err) {
-      console.error('Failed to load brands:', err)
+      console.error('Failed to load data:', err)
     } finally {
       setLoading(false)
     }
   }
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
+  const handleBrandChange = useCallback((newBrandId: string) => {
+    setBrandId(newBrandId)
+    const brand = brands.find((b) => b.id === newBrandId) || null
+    setSelectedBrand(brand)
+  }, [brands])
+
+  // Navigation
+  const currentStepIndex = STEPS.indexOf(currentStep)
+  const canGoBack = currentStepIndex > 0
+  const canGoNext = currentStepIndex < STEPS.length - 1
+
+  const goBack = () => {
+    if (canGoBack) {
+      setCurrentStep(STEPS[currentStepIndex - 1])
+    }
+  }
+
+  const goNext = () => {
+    if (canGoNext) {
+      setCurrentStep(STEPS[currentStepIndex + 1])
+    }
+  }
+
+  // Validation for each step
+  const isBasicsValid = brandId && name.trim()
+
+  const handleSubmit = async () => {
     setError(null)
     setSubmitting(true)
 
     try {
+      // Derive mode from channel selection
+      const derivedMode: CampaignMode =
+        channels.channels.includes('email') && channels.channels.includes('linkedin')
+          ? 'multi_channel'
+          : channels.channels.includes('linkedin')
+          ? 'linkedin_only'
+          : 'email_only'
+
       const res = await fetch('/api/campaigns', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -89,7 +150,7 @@ export default function NewCampaignPage() {
           brand_id: brandId,
           name,
           description: description || undefined,
-          mode,
+          mode: derivedMode,
           custom_instructions: customInstructions || undefined,
           target_persona: targetPersona || undefined,
           primary_angle: primaryAngle || undefined,
@@ -98,8 +159,12 @@ export default function NewCampaignPage() {
           linkedin_first: linkedinFirst,
           wait_for_connection: waitForConnection,
           connection_timeout_hours: connectionTimeoutHours,
-          smartlead_campaign_id: smartleadCampaignId || undefined,
-          heyreach_campaign_id: heyreachCampaignId || undefined,
+          smartlead_campaign_id: channels.smartleadCampaignId || undefined,
+          heyreach_campaign_id: channels.heyreachCampaignId || undefined,
+          // New data source fields
+          data_source_type: dataSource.type || undefined,
+          data_source_config: dataSource.config,
+          auto_ingest: dataSource.autoIngest,
         }),
       })
 
@@ -111,7 +176,7 @@ export default function NewCampaignPage() {
       }
 
       router.push(`/campaigns/${data.campaign.id}`)
-    } catch (err) {
+    } catch {
       setError('Failed to create campaign')
     } finally {
       setSubmitting(false)
@@ -138,6 +203,9 @@ export default function NewCampaignPage() {
             </svg>
             <h3 className={cn(jsb.heading, 'text-lg mb-2')}>No brands found</h3>
             <p className={jsb.subheading}>You need to create a brand before creating campaigns.</p>
+            <Link href="/brands/new" className={cn(jsb.buttonPrimary, 'px-6 py-2 mt-4 inline-block')}>
+              Create Brand
+            </Link>
           </div>
         </div>
       </Shell>
@@ -146,13 +214,10 @@ export default function NewCampaignPage() {
 
   return (
     <Shell>
-      <div className="p-6 lg:p-8">
+      <div className="p-6 lg:p-8 max-w-4xl mx-auto">
         {/* Header */}
         <div className="flex items-center gap-4 mb-6">
-          <Link
-            href="/campaigns"
-            className={cn(jsb.buttonGhost, 'p-2')}
-          >
+          <Link href="/campaigns" className={cn(jsb.buttonGhost, 'p-2')}>
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
             </svg>
@@ -163,261 +228,296 @@ export default function NewCampaignPage() {
           </div>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-6 max-w-3xl">
-          {error && (
-            <div className="bg-red-500/20 border border-red-500/30 rounded-md p-4 text-red-400">
-              {error}
-            </div>
-          )}
+        {/* Progress Steps */}
+        <div className="flex items-center gap-2 mb-8 overflow-x-auto pb-2">
+          {STEPS.map((step, index) => {
+            const isCurrent = step === currentStep
+            const isPast = index < currentStepIndex
+            return (
+              <div key={step} className="flex items-center">
+                {index > 0 && (
+                  <div className={cn('w-8 h-0.5 mx-1', isPast ? 'bg-jsb-pink' : 'bg-jsb-navy-lighter')} />
+                )}
+                <div
+                  className={cn(
+                    'flex items-center gap-2 px-3 py-1.5 rounded-full text-sm whitespace-nowrap',
+                    isCurrent
+                      ? 'bg-jsb-pink/20 text-jsb-pink'
+                      : isPast
+                      ? 'bg-emerald-500/20 text-emerald-400'
+                      : 'bg-jsb-navy-lighter text-gray-500'
+                  )}
+                >
+                  <span className="w-5 h-5 rounded-full flex items-center justify-center text-xs border border-current">
+                    {isPast ? (
+                      <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                      </svg>
+                    ) : (
+                      index + 1
+                    )}
+                  </span>
+                  {stepLabels[step]}
+                </div>
+              </div>
+            )
+          })}
+        </div>
 
-          {/* Brand Selection */}
-          <div className={cn(jsb.card, 'p-6')}>
-            <h2 className={cn(jsb.heading, 'text-lg mb-4')}>Brand</h2>
-            <div>
-              <label className={cn(jsb.label, 'block mb-2')}>Select Brand</label>
-              <select
-                value={brandId}
-                onChange={(e) => setBrandId(e.target.value)}
-                className={cn(jsb.select, 'w-full px-3 py-2')}
-                required
-              >
-                {brands.map((brand) => (
-                  <option key={brand.id} value={brand.id}>
-                    {brand.name}
-                  </option>
-                ))}
-              </select>
-            </div>
+        {error && (
+          <div className="bg-red-500/20 border border-red-500/30 rounded-md p-4 text-red-400 mb-6">
+            {error}
           </div>
+        )}
 
-          {/* Basic Info */}
-          <div className={cn(jsb.card, 'p-6')}>
-            <h2 className={cn(jsb.heading, 'text-lg mb-4')}>Campaign Details</h2>
-            <div className="space-y-4">
+        {/* Step Content */}
+        <div className={cn(jsb.card, 'p-6')}>
+          {/* Step 1: Basics */}
+          {currentStep === 'basics' && (
+            <div className="space-y-6">
+              <div>
+                <h2 className={cn(jsb.heading, 'text-xl mb-2')}>Campaign Basics</h2>
+                <p className="text-gray-400">Name your campaign and select a brand</p>
+              </div>
+
+              {/* Brand Selection */}
+              <div>
+                <label className={cn(jsb.label, 'block mb-2')}>Brand *</label>
+                <select
+                  value={brandId}
+                  onChange={(e) => handleBrandChange(e.target.value)}
+                  className={cn(jsb.select, 'w-full px-3 py-2')}
+                  required
+                >
+                  {brands.map((brand) => (
+                    <option key={brand.id} value={brand.id}>
+                      {brand.name}
+                    </option>
+                  ))}
+                </select>
+
+                {/* Show inherited ICP */}
+                {selectedBrand?.icp && (
+                  <div className={cn(jsb.card, 'p-3 mt-3 bg-emerald-500/10 border-emerald-500/30')}>
+                    <div className="flex items-center gap-2 text-emerald-400 text-sm">
+                      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                      </svg>
+                      ICP inherited from brand
+                      {selectedBrand.icp.personas?.length && (
+                        <span className="text-gray-400">({selectedBrand.icp.personas.length} personas)</span>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Campaign Name */}
               <div>
                 <label className={cn(jsb.label, 'block mb-2')}>Campaign Name *</label>
                 <input
                   type="text"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  className={cn(jsb.input, 'w-full px-3 py-2')}
+                  className={cn(jsb.input, 'w-full px-4 py-3')}
                   placeholder="e.g., Q1 SaaS Outreach"
                   required
                 />
               </div>
+
+              {/* Description */}
               <div>
                 <label className={cn(jsb.label, 'block mb-2')}>Description</label>
                 <textarea
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
-                  className={cn(jsb.input, 'w-full px-3 py-2')}
+                  className={cn(jsb.input, 'w-full px-4 py-3')}
                   rows={2}
                   placeholder="Brief description of this campaign"
                 />
               </div>
-            </div>
-          </div>
 
-          {/* Campaign Mode */}
-          <div className={cn(jsb.card, 'p-6')}>
-            <h2 className={cn(jsb.heading, 'text-lg mb-4')}>Campaign Mode</h2>
-            <div className="grid gap-3">
-              {modeOptions.map((option) => (
-                <label
-                  key={option.value}
-                  className={cn(
-                    'flex items-start gap-3 p-4 rounded-lg border cursor-pointer transition-colors',
-                    mode === option.value
-                      ? 'bg-jsb-pink/10 border-jsb-pink'
-                      : 'bg-jsb-navy border-jsb-navy-lighter hover:border-gray-600'
-                  )}
+              {/* Targeting */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className={cn(jsb.label, 'block mb-2')}>Target Persona</label>
+                  <input
+                    type="text"
+                    value={targetPersona}
+                    onChange={(e) => setTargetPersona(e.target.value)}
+                    className={cn(jsb.input, 'w-full px-4 py-3')}
+                    placeholder="e.g., VP of Marketing"
+                  />
+                </div>
+                <div>
+                  <label className={cn(jsb.label, 'block mb-2')}>Primary Angle</label>
+                  <input
+                    type="text"
+                    value={primaryAngle}
+                    onChange={(e) => setPrimaryAngle(e.target.value)}
+                    className={cn(jsb.input, 'w-full px-4 py-3')}
+                    placeholder="e.g., Cost reduction"
+                  />
+                </div>
+              </div>
+
+              {/* Custom Instructions */}
+              <div>
+                <label className={cn(jsb.label, 'block mb-2')}>Custom Instructions</label>
+                <textarea
+                  value={customInstructions}
+                  onChange={(e) => setCustomInstructions(e.target.value)}
+                  className={cn(jsb.input, 'w-full px-4 py-3')}
+                  rows={3}
+                  placeholder="e.g., Focus on ROI messaging. Keep emails under 100 words."
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  These override brand-level defaults for AI generation
+                </p>
+              </div>
+
+              {/* Navigation */}
+              <div className="flex gap-3 pt-4">
+                <Link href="/campaigns" className={cn(jsb.buttonSecondary, 'px-6 py-3')}>
+                  Cancel
+                </Link>
+                <button
+                  onClick={goNext}
+                  disabled={!isBasicsValid}
+                  className={cn(jsb.buttonPrimary, 'flex-1 py-3')}
                 >
-                  <input
-                    type="radio"
-                    name="mode"
-                    value={option.value}
-                    checked={mode === option.value}
-                    onChange={(e) => setMode(e.target.value as CampaignMode)}
-                    className="mt-1"
-                  />
-                  <div>
-                    <p className={jsb.heading}>{option.label}</p>
-                    <p className={jsb.subheading}>{option.description}</p>
-                  </div>
-                </label>
-              ))}
-            </div>
-          </div>
-
-          {/* Targeting */}
-          <div className={cn(jsb.card, 'p-6')}>
-            <h2 className={cn(jsb.heading, 'text-lg mb-4')}>Targeting</h2>
-            <div className="space-y-4">
-              <div>
-                <label className={cn(jsb.label, 'block mb-2')}>Target Persona</label>
-                <input
-                  type="text"
-                  value={targetPersona}
-                  onChange={(e) => setTargetPersona(e.target.value)}
-                  className={cn(jsb.input, 'w-full px-3 py-2')}
-                  placeholder="e.g., VP of Marketing at B2B SaaS companies"
-                />
-              </div>
-              <div>
-                <label className={cn(jsb.label, 'block mb-2')}>Primary Angle</label>
-                <input
-                  type="text"
-                  value={primaryAngle}
-                  onChange={(e) => setPrimaryAngle(e.target.value)}
-                  className={cn(jsb.input, 'w-full px-3 py-2')}
-                  placeholder="e.g., Cost reduction, Efficiency gains"
-                />
+                  Continue
+                </button>
               </div>
             </div>
-          </div>
+          )}
 
-          {/* Custom Instructions */}
-          <div className={cn(jsb.card, 'p-6')}>
-            <h2 className={cn(jsb.heading, 'text-lg mb-4')}>Custom Instructions</h2>
-            <p className={cn(jsb.subheading, 'mb-4')}>
-              These instructions will be added to the AI when generating sequences for this campaign.
-              They override brand-level defaults.
-            </p>
-            <textarea
-              value={customInstructions}
-              onChange={(e) => setCustomInstructions(e.target.value)}
-              className={cn(jsb.input, 'w-full px-3 py-2')}
-              rows={4}
-              placeholder="e.g., Focus on ROI messaging. Avoid mentioning competitors. Keep emails under 100 words."
+          {/* Step 2: Data Source */}
+          {currentStep === 'dataSource' && (
+            <DataSourceStep
+              data={dataSource}
+              brandIcp={selectedBrand?.icp as TenantICP | null}
+              onChange={setDataSource}
+              onNext={goNext}
+              onBack={goBack}
             />
-          </div>
+          )}
 
-          {/* Sequence Settings */}
-          <div className={cn(jsb.card, 'p-6')}>
-            <h2 className={cn(jsb.heading, 'text-lg mb-4')}>Sequence Settings</h2>
-            <div className="grid grid-cols-2 gap-4">
-              {mode !== 'linkedin_only' && (
-                <div>
-                  <label className={cn(jsb.label, 'block mb-2')}>Email Steps</label>
-                  <input
-                    type="number"
-                    value={emailCount}
-                    onChange={(e) => setEmailCount(parseInt(e.target.value) || 7)}
-                    className={cn(jsb.input, 'w-full px-3 py-2')}
-                    min={1}
-                    max={15}
-                  />
-                </div>
-              )}
-              {mode !== 'email_only' && (
-                <div>
-                  <label className={cn(jsb.label, 'block mb-2')}>LinkedIn Steps</label>
-                  <input
-                    type="number"
-                    value={linkedinCount}
-                    onChange={(e) => setLinkedinCount(parseInt(e.target.value) || 4)}
-                    className={cn(jsb.input, 'w-full px-3 py-2')}
-                    min={1}
-                    max={10}
-                  />
-                </div>
-              )}
-            </div>
+          {/* Step 3: Channels */}
+          {currentStep === 'channels' && (
+            <ChannelsStep
+              data={channels}
+              hasSmartlead={tenantConfig.hasSmartlead}
+              hasHeyreach={tenantConfig.hasHeyreach}
+              onChange={setChannels}
+              onNext={goNext}
+              onBack={goBack}
+            />
+          )}
 
-            {mode === 'multi_channel' && (
-              <div className="mt-4 space-y-4 pt-4 border-t border-jsb-navy-lighter">
-                <label className="flex items-center gap-3 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={linkedinFirst}
-                    onChange={(e) => setLinkedinFirst(e.target.checked)}
-                    className="rounded border-gray-600 text-jsb-pink focus:ring-jsb-pink"
-                  />
-                  <span className="text-gray-300">Start with LinkedIn before email</span>
-                </label>
-
-                <label className="flex items-center gap-3 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={waitForConnection}
-                    onChange={(e) => setWaitForConnection(e.target.checked)}
-                    className="rounded border-gray-600 text-jsb-pink focus:ring-jsb-pink"
-                  />
-                  <span className="text-gray-300">Wait for LinkedIn connection before sending messages</span>
-                </label>
-
-                {waitForConnection && (
-                  <div className="ml-6">
-                    <label className={cn(jsb.label, 'block mb-2')}>Connection Timeout (hours)</label>
-                    <input
-                      type="number"
-                      value={connectionTimeoutHours}
-                      onChange={(e) => setConnectionTimeoutHours(parseInt(e.target.value) || 72)}
-                      className={cn(jsb.input, 'w-32 px-3 py-2')}
-                      min={24}
-                      max={168}
-                    />
-                    <p className={cn(jsb.subheading, 'mt-1')}>
-                      Fall back to email if not connected within this time
-                    </p>
-                  </div>
-                )}
+          {/* Step 4: Review */}
+          {currentStep === 'review' && (
+            <div className="space-y-6">
+              <div>
+                <h2 className={cn(jsb.heading, 'text-xl mb-2')}>Review Campaign</h2>
+                <p className="text-gray-400">Confirm your campaign settings before creating</p>
               </div>
-            )}
-          </div>
 
-          {/* Platform Integration */}
-          <div className={cn(jsb.card, 'p-6')}>
-            <h2 className={cn(jsb.heading, 'text-lg mb-2')}>Platform Integration</h2>
-            <p className={cn(jsb.subheading, 'mb-4')}>
-              Link this campaign to existing campaigns in Smartlead and HeyReach.
-              Create template campaigns in each platform first, then enter their IDs here.
-            </p>
-            <div className="grid grid-cols-2 gap-4">
-              {mode !== 'linkedin_only' && (
-                <div>
-                  <label className={cn(jsb.label, 'block mb-2')}>Smartlead Campaign ID</label>
-                  <input
-                    type="text"
-                    value={smartleadCampaignId}
-                    onChange={(e) => setSmartleadCampaignId(e.target.value)}
-                    className={cn(jsb.input, 'w-full px-3 py-2')}
-                    placeholder="e.g., 12345"
-                  />
+              {/* Summary Cards */}
+              <div className="space-y-4">
+                {/* Basics Summary */}
+                <div className={cn(jsb.card, 'p-4 bg-jsb-navy-lighter/50')}>
+                  <h3 className={cn(jsb.heading, 'text-sm mb-3 flex items-center gap-2')}>
+                    <span className="w-6 h-6 rounded-full bg-jsb-pink/20 text-jsb-pink flex items-center justify-center text-xs">1</span>
+                    Basics
+                  </h3>
+                  <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+                    <dt className="text-gray-500">Name:</dt>
+                    <dd className="text-white">{name}</dd>
+                    <dt className="text-gray-500">Brand:</dt>
+                    <dd className="text-white">{selectedBrand?.name}</dd>
+                    {targetPersona && (
+                      <>
+                        <dt className="text-gray-500">Target:</dt>
+                        <dd className="text-white">{targetPersona}</dd>
+                      </>
+                    )}
+                    {primaryAngle && (
+                      <>
+                        <dt className="text-gray-500">Angle:</dt>
+                        <dd className="text-white">{primaryAngle}</dd>
+                      </>
+                    )}
+                  </dl>
                 </div>
-              )}
-              {mode !== 'email_only' && (
-                <div>
-                  <label className={cn(jsb.label, 'block mb-2')}>HeyReach Campaign ID</label>
-                  <input
-                    type="text"
-                    value={heyreachCampaignId}
-                    onChange={(e) => setHeyreachCampaignId(e.target.value)}
-                    className={cn(jsb.input, 'w-full px-3 py-2')}
-                    placeholder="e.g., abc-123"
-                  />
+
+                {/* Data Source Summary */}
+                <div className={cn(jsb.card, 'p-4 bg-jsb-navy-lighter/50')}>
+                  <h3 className={cn(jsb.heading, 'text-sm mb-3 flex items-center gap-2')}>
+                    <span className="w-6 h-6 rounded-full bg-jsb-pink/20 text-jsb-pink flex items-center justify-center text-xs">2</span>
+                    Data Source
+                  </h3>
+                  <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+                    <dt className="text-gray-500">Type:</dt>
+                    <dd className="text-white capitalize">{dataSource.type || 'Not selected'}</dd>
+                    <dt className="text-gray-500">Auto-ingest:</dt>
+                    <dd className="text-white">{dataSource.autoIngest ? 'Enabled' : 'Disabled'}</dd>
+                  </dl>
                 </div>
-              )}
+
+                {/* Channels Summary */}
+                <div className={cn(jsb.card, 'p-4 bg-jsb-navy-lighter/50')}>
+                  <h3 className={cn(jsb.heading, 'text-sm mb-3 flex items-center gap-2')}>
+                    <span className="w-6 h-6 rounded-full bg-jsb-pink/20 text-jsb-pink flex items-center justify-center text-xs">3</span>
+                    Channels
+                  </h3>
+                  <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+                    <dt className="text-gray-500">Channels:</dt>
+                    <dd className="text-white">
+                      {channels.channels.map((c) => (c === 'email' ? 'Email' : 'LinkedIn')).join(', ')}
+                    </dd>
+                    {channels.channels.includes('email') && channels.smartleadCampaignId && (
+                      <>
+                        <dt className="text-gray-500">SmartLead ID:</dt>
+                        <dd className="text-white">{channels.smartleadCampaignId}</dd>
+                      </>
+                    )}
+                    {channels.channels.includes('linkedin') && channels.heyreachCampaignId && (
+                      <>
+                        <dt className="text-gray-500">HeyReach ID:</dt>
+                        <dd className="text-white">{channels.heyreachCampaignId}</dd>
+                      </>
+                    )}
+                  </dl>
+                </div>
+              </div>
+
+              {/* Navigation */}
+              <div className="flex gap-3 pt-4">
+                <button onClick={goBack} className={cn(jsb.buttonSecondary, 'px-6 py-3')}>
+                  Back
+                </button>
+                <button
+                  onClick={handleSubmit}
+                  disabled={submitting}
+                  className={cn(jsb.buttonPrimary, 'flex-1 py-3')}
+                >
+                  {submitting ? (
+                    <span className="flex items-center justify-center gap-2">
+                      <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                      </svg>
+                      Creating...
+                    </span>
+                  ) : (
+                    'Create Campaign'
+                  )}
+                </button>
+              </div>
             </div>
-          </div>
-
-          {/* Actions */}
-          <div className="flex items-center gap-4 pt-4">
-            <button
-              type="submit"
-              disabled={submitting || !name || !brandId}
-              className={cn(jsb.buttonPrimary, 'px-6 py-2')}
-            >
-              {submitting ? 'Creating...' : 'Create Campaign'}
-            </button>
-            <Link
-              href="/campaigns"
-              className={cn(jsb.buttonSecondary, 'px-6 py-2')}
-            >
-              Cancel
-            </Link>
-          </div>
-        </form>
+          )}
+        </div>
       </div>
     </Shell>
   )

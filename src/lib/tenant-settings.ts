@@ -7,6 +7,8 @@ import { createClient } from '@supabase/supabase-js'
 import type { LLMProvider } from './llm/types'
 
 // AudienceLab source configuration (up to 5 per tenant)
+// DEPRECATED: Data sources are now configured at the campaign level
+// Kept for backwards compatibility with existing tenants
 export interface AudienceLabSource {
   name: string
   api_url: string
@@ -14,6 +16,25 @@ export interface AudienceLabSource {
   type: 'pixel' | 'intent'
   enabled?: boolean
   schedule_cron?: string
+}
+
+// =============================================================================
+// Campaign-Level Data Source Types (NEW - campaign-centric architecture)
+// =============================================================================
+
+/** Data source types available at campaign level */
+export type DataSourceType = 'intent' | 'pixel' | 'apollo' | 'csv' | 'manual'
+
+/** Configuration for campaign data sources - varies by type */
+export interface CampaignDataSourceConfig {
+  // For intent/pixel sources (AudienceLab)
+  api_url?: string
+  api_key?: string
+  // For apollo sources
+  saved_search_id?: string
+  // For CSV sources
+  last_upload_at?: string
+  // Manual sources have no config
 }
 
 // =============================================================================

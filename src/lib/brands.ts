@@ -5,12 +5,11 @@
 
 import { supabase } from './supabase'
 import type { CampaignMode } from './orchestration/types'
+import type { DataSourceType, CampaignDataSourceConfig, TenantICP } from './tenant-settings'
 
 // ============================================================================
 // TYPES
 // ============================================================================
-
-import type { TenantICP } from './tenant-settings'
 
 export interface Brand {
   id: string
@@ -81,6 +80,12 @@ export interface Campaign {
   // Platform Integration
   smartlead_campaign_id?: string
   heyreach_campaign_id?: string
+
+  // Data Source Configuration (campaign-centric architecture)
+  data_source_type?: DataSourceType
+  data_source_config?: CampaignDataSourceConfig
+  auto_ingest?: boolean
+  last_ingested_at?: string
 
   // Status
   status: 'draft' | 'active' | 'paused' | 'completed'

@@ -6,6 +6,7 @@
  */
 
 import { inngest } from './client'
+import { NonRetriableError } from 'inngest'
 import { supabase, type Lead } from '../src/lib/supabase'
 import { writeSequenceWithProfile } from '../src/agents/agent3-writer'
 import { buildContextProfile, type ResearchRecord, type EnhancedResearchData } from '../src/agents/context-profile-builder'
@@ -70,6 +71,29 @@ export const sequencingPipeline = inngest.createFunction(
     })
 
     console.log(`[Workflow 3] Generating sequence for: ${lead.first_name} ${lead.last_name} at ${lead.company_name}`)
+
+    // Campaign Gate: Validate campaign is active (if lead has campaign_id)
+    // This is the campaign-centric architecture: workflows only run for active campaigns
+    if (lead.campaign_id) {
+      await step.run('validate-campaign', async () => {
+        const { data: campaign, error } = await supabase
+          .from('campaigns')
+          .select('id, status')
+          .eq('id', lead.campaign_id)
+          .single()
+
+        if (error || !campaign) {
+          throw new NonRetriableError(`Campaign ${lead.campaign_id} not found`)
+        }
+
+        if (campaign.status !== 'active') {
+          throw new NonRetriableError(`Campaign ${lead.campaign_id} is not active (status: ${campaign.status})`)
+        }
+
+        console.log(`[Workflow 3] Campaign ${lead.campaign_id} validated (active)`)
+        return campaign
+      })
+    }
 
     // Step 2: Check if sequence already exists
     const existingSequence = await step.run('check-existing-sequence', async () => {

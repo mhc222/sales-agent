@@ -1,4 +1,5 @@
 import { inngest } from './client'
+import { NonRetriableError } from 'inngest'
 import { supabase, type Lead } from '../src/lib/supabase'
 import { normalizeLead, type NormalizedLead } from '../src/lib/data-normalizer'
 
@@ -32,6 +33,7 @@ interface IntentIngestedEvent {
     company_industry?: string
     company_description?: string
     tenant_id: string
+    campaign_id?: string // Campaign-centric architecture: links lead to campaign
     // Intent-specific fields
     intent_score: number
     intent_tier: 'strong' | 'medium' | 'weak'
@@ -63,6 +65,30 @@ export const intentQualification = inngest.createFunction(
     const now = new Date().toISOString()
 
     console.log(`[Intent Workflow] Processing: ${eventData.email} (score: ${eventData.intent_score}, rank: ${eventData.batch_rank})`)
+
+    // Campaign Gate: Validate campaign is active (if campaign_id provided)
+    // This is the campaign-centric architecture: workflows only run for active campaigns
+    const campaignId = eventData.campaign_id
+    if (campaignId) {
+      await step.run('validate-campaign', async () => {
+        const { data: campaign, error } = await supabase
+          .from('campaigns')
+          .select('id, status')
+          .eq('id', campaignId)
+          .single()
+
+        if (error || !campaign) {
+          throw new NonRetriableError(`Campaign ${campaignId} not found`)
+        }
+
+        if (campaign.status !== 'active') {
+          throw new NonRetriableError(`Campaign ${campaignId} is not active (status: ${campaign.status})`)
+        }
+
+        console.log(`[Intent Workflow] Campaign ${campaignId} validated (active)`)
+        return campaign
+      })
+    }
 
     // Normalize incoming data at the start
     const normalizedData = normalizeLead(eventData as Record<string, unknown>, 'intent')
@@ -133,6 +159,7 @@ export const intentQualification = inngest.createFunction(
         .from('leads')
         .insert({
           tenant_id: eventData.tenant_id,
+          campaign_id: eventData.campaign_id, // Campaign-centric: link lead to campaign
           first_name: eventData.first_name,
           last_name: eventData.last_name,
           email: eventData.email,

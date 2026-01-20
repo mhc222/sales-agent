@@ -8,11 +8,10 @@ import CompanyStep from '@/components/onboarding/CompanyStep'
 import ICPStep from '@/components/onboarding/ICPStep'
 import ChannelsStep from '@/components/onboarding/ChannelsStep'
 import EmailProviderStep from '@/components/onboarding/EmailProviderStep'
-import ApolloStep from '@/components/onboarding/ApolloStep'
-import AudienceLabStep from '@/components/onboarding/AudienceLabStep'
 import LinkedInStep from '@/components/onboarding/LinkedInStep'
 import CRMStep from '@/components/onboarding/CRMStep'
 import DNCStep from '@/components/onboarding/DNCStep'
+// Note: ApolloStep and AudienceLabStep removed - data sources are now campaign-level
 
 import type { LLMProvider } from '@/src/lib/llm/types'
 
@@ -50,28 +49,14 @@ type OnboardingData = {
   }
   channels: {
     outreachChannels: ('email' | 'linkedin')[]
-    dataSources: ('apollo' | 'audiencelab')[]
+    // Note: dataSources removed - now configured at campaign level
   }
   emailProvider: {
     provider: 'smartlead' | 'nureply' | 'instantly' | ''
     apiKey: string
     campaignId: string
   }
-  apollo: {
-    apiKey: string
-  }
-  audienceLab: {
-    sources: Array<{
-      name: string
-      apiUrl: string
-      apiKey: string
-      type: 'pixel' | 'intent'
-      enabled: boolean
-      intentKeywords?: string[]
-      audienceContext?: string
-    }>
-    skip: boolean
-  }
+  // Note: apollo and audienceLab removed - data sources are now campaign-level
   linkedIn: {
     provider: 'heyreach' | ''
     apiKey: string
@@ -90,6 +75,7 @@ type OnboardingData = {
 }
 
 // Steps are dynamically computed based on channel selections
+// Note: Apollo and AudienceLab steps removed - data sources are now campaign-level
 const getSteps = (channels: OnboardingData['channels']) => {
   const baseSteps = [
     { id: 'llm', title: 'AI Provider' },
@@ -99,25 +85,14 @@ const getSteps = (channels: OnboardingData['channels']) => {
   ]
 
   // Safely access arrays with fallback to empty arrays
-  const dataSources = channels?.dataSources || []
   const outreachChannels = channels?.outreachChannels || []
 
-  // Add Apollo step if selected as data source
-  if (dataSources.includes('apollo')) {
-    baseSteps.push({ id: 'apollo', title: 'Apollo' })
-  }
-
-  // Add email provider step if email channel selected
+  // Add email provider step if email channel selected (SmartLead account)
   if (outreachChannels.includes('email')) {
     baseSteps.push({ id: 'email', title: 'Email Provider' })
   }
 
-  // Add AudienceLab step if selected as data source
-  if (dataSources.includes('audiencelab')) {
-    baseSteps.push({ id: 'audiencelab', title: 'Data Sources' })
-  }
-
-  // Add LinkedIn step if linkedin channel selected
+  // Add LinkedIn step if linkedin channel selected (HeyReach account)
   if (outreachChannels.includes('linkedin')) {
     baseSteps.push({ id: 'linkedin', title: 'LinkedIn' })
   }
@@ -143,11 +118,10 @@ const defaultData: OnboardingData = {
   },
   channels: {
     outreachChannels: ['email'], // Default to email
-    dataSources: ['apollo'], // Apollo is always required
+    // Note: dataSources removed - now configured at campaign level
   },
   emailProvider: { provider: '', apiKey: '', campaignId: '' },
-  apollo: { apiKey: '' },
-  audienceLab: { sources: [], skip: false },
+  // Note: apollo and audienceLab removed - data sources are now campaign-level
   linkedIn: { provider: '', apiKey: '', skip: false },
   crm: { provider: '', apiKey: '', locationId: '', skip: false },
   dnc: { entries: [], skip: false },
@@ -189,8 +163,8 @@ export default function OnboardingPage() {
         return
       }
 
-      // Redirect to account page to see all brands
-      router.push('/account')
+      // Redirect to campaign creation - data sources are now campaign-level
+      router.push('/campaigns/new')
       router.refresh()
     } catch (err) {
       setError('An unexpected error occurred')
@@ -307,14 +281,7 @@ export default function OnboardingPage() {
           />
         )}
 
-        {currentStepId === 'apollo' && (
-          <ApolloStep
-            data={data.apollo}
-            onChange={(apollo) => updateData({ apollo })}
-            onNext={goNext}
-            onBack={goBack}
-          />
-        )}
+        {/* Note: ApolloStep removed - data sources are now campaign-level */}
 
         {currentStepId === 'email' && (
           <EmailProviderStep
@@ -325,14 +292,7 @@ export default function OnboardingPage() {
           />
         )}
 
-        {currentStepId === 'audiencelab' && (
-          <AudienceLabStep
-            data={data.audienceLab}
-            onChange={(audienceLab) => updateData({ audienceLab })}
-            onNext={goNext}
-            onBack={goBack}
-          />
-        )}
+        {/* Note: AudienceLabStep removed - data sources are now campaign-level */}
 
         {currentStepId === 'linkedin' && (
           <LinkedInStep

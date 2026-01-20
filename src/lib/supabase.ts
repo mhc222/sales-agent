@@ -18,6 +18,7 @@ export const supabase = createClient(supabaseUrl, supabaseServiceKey, {
 export type Lead = {
   id: string
   tenant_id: string
+  campaign_id?: string
   first_name: string
   last_name: string
   email: string
@@ -50,6 +51,9 @@ export type Lead = {
   in_ghl_company: boolean
   in_smartlead: boolean
   in_heyreach: boolean
+  // GHL CRM Integration
+  ghl_contact_id?: string
+  ghl_synced_at?: string
   // Qualification results
   qualification_decision?: 'YES' | 'NO' | 'REVIEW'
   qualification_reasoning?: string

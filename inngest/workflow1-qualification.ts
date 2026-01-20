@@ -1,4 +1,5 @@
 import { inngest } from './client'
+import { NonRetriableError } from 'inngest'
 import { qualifyNormalizedLead, type ExistingRecords, type BrandContext } from '../src/agents/agent1-qualification'
 import { supabase, type Lead } from '../src/lib/supabase'
 import { normalizeLead, type NormalizedLead } from '../src/lib/data-normalizer'
@@ -63,6 +64,30 @@ export const qualificationAndResearch = inngest.createFunction(
     const source: LeadSource = eventData.source || 'pixel' // Default to pixel for backward compatibility
 
     console.log(`[Workflow 1] Starting qualification for: ${eventData.email} (source: ${source})`)
+
+    // Campaign Gate: Validate campaign is active (if campaign_id provided)
+    // This is the campaign-centric architecture: workflows only run for active campaigns
+    const campaignId = eventData.campaign_id
+    if (campaignId) {
+      await step.run('validate-campaign', async () => {
+        const { data: campaign, error } = await supabase
+          .from('campaigns')
+          .select('id, status')
+          .eq('id', campaignId)
+          .single()
+
+        if (error || !campaign) {
+          throw new NonRetriableError(`Campaign ${campaignId} not found`)
+        }
+
+        if (campaign.status !== 'active') {
+          throw new NonRetriableError(`Campaign ${campaignId} is not active (status: ${campaign.status})`)
+        }
+
+        console.log(`[Workflow 1] Campaign ${campaignId} validated (active)`)
+        return campaign
+      })
+    }
 
     // Normalize incoming data at the start
     const normalizedData = normalizeLead(eventData as Record<string, unknown>, source)

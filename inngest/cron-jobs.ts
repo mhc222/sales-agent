@@ -1151,6 +1151,80 @@ export const cronReevaluateHolding = inngest.createFunction(
   }
 )
 
+// ============================================================================
+// CRON 9: Campaign Data Ingestion (6am UTC)
+// NEW: Campaign-centric architecture - iterates active campaigns, not tenants
+// ============================================================================
+
+interface CampaignForIngestion {
+  id: string
+  tenant_id: string
+  brand_id: string
+  data_source_type: string
+  data_source_config: Record<string, unknown>
+  name: string
+}
+
+export const cronCampaignDataIngestion = inngest.createFunction(
+  {
+    id: 'cron-campaign-data-ingestion',
+    name: 'Campaign Data Ingestion (Active Campaigns)',
+    retries: 2,
+  },
+  { cron: '0 6 * * *' }, // 6am UTC daily
+  async ({ step }) => {
+    console.log('[Cron Campaign Ingestion] Starting campaign-based data ingestion...')
+
+    // Fetch active campaigns with auto_ingest enabled
+    const campaigns = await step.run('fetch-campaigns', async () => {
+      const { data, error } = await supabase
+        .from('campaigns')
+        .select('id, tenant_id, brand_id, data_source_type, data_source_config, name')
+        .eq('status', 'active')
+        .eq('auto_ingest', true)
+        .not('data_source_type', 'is', null)
+
+      if (error) {
+        console.error('[Cron Campaign Ingestion] Error fetching campaigns:', error)
+        return []
+      }
+
+      return (data || []) as CampaignForIngestion[]
+    })
+
+    if (campaigns.length === 0) {
+      console.log('[Cron Campaign Ingestion] No active campaigns with auto_ingest enabled')
+      return { status: 'success', campaigns_processed: 0 }
+    }
+
+    console.log(`[Cron Campaign Ingestion] Found ${campaigns.length} campaigns to process`)
+
+    // Emit ingestion event per campaign
+    await step.run('emit-ingestion-events', async () => {
+      const events = campaigns.map((campaign) => ({
+        name: 'campaign.ingest-data' as const,
+        data: {
+          campaign_id: campaign.id,
+          tenant_id: campaign.tenant_id,
+          brand_id: campaign.brand_id,
+          data_source_type: campaign.data_source_type,
+          data_source_config: campaign.data_source_config,
+          campaign_name: campaign.name,
+        },
+      }))
+
+      await inngest.send(events)
+      console.log(`[Cron Campaign Ingestion] Emitted ${events.length} ingestion events`)
+    })
+
+    return {
+      status: 'success',
+      campaigns_processed: campaigns.length,
+      campaign_ids: campaigns.map((c) => c.id),
+    }
+  }
+)
+
 // Manual trigger: Re-evaluate holding leads for a specific tenant
 export const reevaluateHoldingForTenant = inngest.createFunction(
   {
