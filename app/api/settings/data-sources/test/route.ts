@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server'
 import { createClient } from '@/src/lib/supabase-server'
 import { createApolloClient } from '@/src/lib/apollo'
 
+export const dynamic = 'force-dynamic'
+
 export async function POST(request: Request) {
   try {
     // Verify user is authenticated

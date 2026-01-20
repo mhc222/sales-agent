@@ -3,6 +3,8 @@ import { createClient, createServiceClient } from '@/src/lib/supabase-server'
 import { getTenantSettings } from '@/src/lib/tenant-settings'
 import type { TargetingPreference } from '@/src/lib/tenant-settings'
 
+export const dynamic = 'force-dynamic'
+
 /**
  * GET /api/settings/targeting
  * Fetch current targeting preferences for the tenant

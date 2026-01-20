@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server'
 import { createClient, createServiceClient } from '@/src/lib/supabase-server'
 import { maskApiKey, TenantSettings, TenantIntegrations } from '@/src/lib/tenant-settings'
 
+export const dynamic = 'force-dynamic'
+
 type EmailProvider = 'smartlead' | 'nureply' | 'instantly'
 type LinkedInProvider = 'heyreach'
 type Provider = EmailProvider | LinkedInProvider

@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server'
 import { createClient } from '@/src/lib/supabase-server'
 import { calculateTriggerReadiness, type TriggerReadinessInput } from '@/src/lib/trigger-readiness'
 
+export const dynamic = 'force-dynamic'
+
 interface ResearchSignals {
   persona_match?: { type: string; decision_level: string }
   triggers?: Array<{ type?: string; fact?: string }>

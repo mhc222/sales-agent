@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server'
 import { createClient } from '@/src/lib/supabase-server'
 import { TenantSettings, TenantIntegrations } from '@/src/lib/tenant-settings'
 
+export const dynamic = 'force-dynamic'
+
 type Provider = 'smartlead' | 'nureply' | 'instantly' | 'heyreach'
 
 interface TestResult {

@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/src/lib/supabase-server'
 
+export const dynamic = 'force-dynamic'
+
 /**
  * GET /api/account/brands
  * List all brands for the current user with onboarding status

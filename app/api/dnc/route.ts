@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server'
 import { createClient } from '@/src/lib/supabase-server'
 import { createServiceClient } from '@/src/lib/supabase-server'
 
+export const dynamic = 'force-dynamic'
+
 // GET - List DNC entries
 export async function GET(request: Request) {
   try {

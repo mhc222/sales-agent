@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '../../../../src/lib/supabase'
 
+export const dynamic = 'force-dynamic'
+
 /**
  * GET /api/leads/intent
  * Returns intent data leads for daily review, sorted by intent_score DESC

@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { inngest } from '../../../inngest/client'
 import { calculateIntentScore, IntentLeadData } from '../../../src/lib/intent-scoring'
 
+export const dynamic = 'force-dynamic'
+
 /**
  * Daily Intent Data Ingestion
  * Fetches 100 leads from AudienceLab intent segment, scores them, and processes:

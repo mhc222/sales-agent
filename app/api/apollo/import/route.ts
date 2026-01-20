@@ -3,6 +3,8 @@ import { createClient, createServiceClient } from '@/src/lib/supabase-server'
 import { inngest } from '@/inngest/client'
 import type { ApolloLead } from '@/src/lib/apollo'
 
+export const dynamic = 'force-dynamic'
+
 export async function POST(request: Request) {
   try {
     // Verify user is authenticated

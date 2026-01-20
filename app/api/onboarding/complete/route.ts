@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server'
 import { createClient } from '@/src/lib/supabase-server'
 import { createServiceClient } from '@/src/lib/supabase-server'
 import { normalizeDomain } from '@/src/lib/dnc'
+
+export const dynamic = 'force-dynamic'
 import type {
   AccountCriteria,
   ICPPersona,

@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server'
 import { createClient, createServiceClient } from '@/src/lib/supabase-server'
 import { getTenantSettings, getTenantLLM } from '@/src/lib/tenant-settings'
 
+export const dynamic = 'force-dynamic'
+
 interface ChatMessage {
   role: 'user' | 'assistant'
   content: string

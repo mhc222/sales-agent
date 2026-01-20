@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/src/lib/supabase-server'
 
+export const dynamic = 'force-dynamic'
+
 /**
  * Save onboarding progress to localStorage via client
  * This endpoint validates the user is authenticated and returns success

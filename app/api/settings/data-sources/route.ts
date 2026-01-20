@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server'
 import { createClient, createServiceClient } from '@/src/lib/supabase-server'
 import { maskApiKey, TenantSettings } from '@/src/lib/tenant-settings'
 
+export const dynamic = 'force-dynamic'
+
 export async function GET(request: Request) {
   try {
     // Verify user is authenticated
