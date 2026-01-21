@@ -1,13 +1,12 @@
 import type { Metadata } from 'next'
 import { Inter } from 'next/font/google'
 import './globals.css'
-import { ClientProviders } from './client-providers'
 
 const inter = Inter({ subsets: ['latin'] })
 
 export const metadata: Metadata = {
-  title: 'JSB Media - Sales Agent',
-  description: 'Lead management and email sequence dashboard',
+  title: 'Sales Agent',
+  description: 'Internal cold email campaign manager',
 }
 
 export default function RootLayout({
@@ -17,9 +16,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className={inter.className}>
-        <ClientProviders>{children}</ClientProviders>
-      </body>
+      <body className={inter.className}>{children}</body>
     </html>
   )
 }

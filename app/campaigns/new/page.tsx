@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { Shell } from '@/components/layout/Shell'
+import { AppAppShell } from '@/components/AppAppShell'
 import { jsb, cn } from '@/lib/styles'
 import type { Brand } from '@/src/lib/brands'
 import type { CampaignMode } from '@/src/lib/orchestration/types'
@@ -202,17 +202,17 @@ export default function NewCampaignPage() {
 
   if (loading) {
     return (
-      <Shell>
+      <AppShell>
         <div className="flex items-center justify-center h-64">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-jsb-pink"></div>
         </div>
-      </Shell>
+      </AppShell>
     )
   }
 
   if (brands.length === 0) {
     return (
-      <Shell>
+      <AppShell>
         <div className="p-6 lg:p-8">
           <div className={cn(jsb.card, 'p-8 text-center')}>
             <svg className="w-12 h-12 text-gray-600 mx-auto mb-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
@@ -242,12 +242,12 @@ export default function NewCampaignPage() {
             </div>
           </div>
         </div>
-      </Shell>
+      </AppShell>
     )
   }
 
   return (
-    <Shell>
+    <AppShell>
       <div className="p-6 lg:p-8 max-w-4xl mx-auto">
         {/* Header */}
         <div className="flex items-center gap-4 mb-6">
@@ -718,6 +718,6 @@ export default function NewCampaignPage() {
           </div>
         </div>
       </div>
-    </Shell>
+    </AppShell>
   )
 }
