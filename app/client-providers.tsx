@@ -2,6 +2,10 @@
 
 import { TenantProvider } from '@/contexts/TenantContext'
 
-export function Providers({ children }: { children: React.ReactNode }) {
+export function ClientProviders({
+  children,
+}: {
+  children: React.ReactNode
+}) {
   return <TenantProvider>{children}</TenantProvider>
 }
