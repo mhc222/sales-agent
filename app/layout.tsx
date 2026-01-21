@@ -6,7 +6,7 @@ const inter = Inter({ subsets: ['latin'] })
 
 export const metadata: Metadata = {
   title: 'Sales Agent',
-  description: 'Internal cold email campaign manager',
+  description: 'Cold email campaign manager',
 }
 
 export default function RootLayout({
