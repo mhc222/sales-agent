@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { AppAppShell } from '@/components/AppAppShell'
+import { AppShell } from '@/components/AppShell'
 import { jsb, cn } from '@/lib/styles'
 import type { Brand } from '@/src/lib/brands'
 import type { CampaignMode } from '@/src/lib/orchestration/types'
