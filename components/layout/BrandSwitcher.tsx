@@ -2,28 +2,62 @@
 
 import { useState, useRef, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { useTenant } from '@/contexts/TenantContext'
 import { cn } from '@/lib/styles'
+
+interface Brand {
+  id: string
+  name: string
+}
 
 interface BrandSwitcherProps {
   collapsed?: boolean
 }
 
+const ACTIVE_BRAND_KEY = 'active_brand_id'
+
 export function BrandSwitcher({ collapsed = false }: BrandSwitcherProps) {
-  const { tenants, activeTenant, loading, switchTenant, createTenant } = useTenant()
+  const [brands, setBrands] = useState<Brand[]>([])
+  const [activeBrand, setActiveBrand] = useState<Brand | null>(null)
+  const [loading, setLoading] = useState(true)
   const [isOpen, setIsOpen] = useState(false)
-  const [isCreating, setIsCreating] = useState(false)
-  const [newBrandName, setNewBrandName] = useState('')
-  const [createLoading, setCreateLoading] = useState(false)
   const dropdownRef = useRef<HTMLDivElement>(null)
   const router = useRouter()
+
+  useEffect(() => {
+    fetchBrands()
+  }, [])
+
+  const fetchBrands = async () => {
+    try {
+      const res = await fetch('/api/brands')
+      const data = await res.json()
+
+      if (res.ok) {
+        setBrands(data.brands || [])
+
+        // Get stored brand or use first
+        const storedBrandId = localStorage.getItem(ACTIVE_BRAND_KEY)
+        const brandList = data.brands || []
+
+        if (brandList.length > 0) {
+          const stored = brandList.find((b: Brand) => b.id === storedBrandId)
+          const active = stored || brandList[0]
+          setActiveBrand(active)
+          localStorage.setItem(ACTIVE_BRAND_KEY, active.id)
+        }
+      }
+    } catch (err) {
+      console.error('Failed to load brands:', err)
+    } finally {
+      setLoading(false)
+    }
+  }
 
   // Close dropdown when clicking outside
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
         setIsOpen(false)
-        setIsCreating(false)
       }
     }
 
@@ -31,17 +65,22 @@ export function BrandSwitcher({ collapsed = false }: BrandSwitcherProps) {
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
 
-  const handleSwitch = async (tenantId: string) => {
-    if (tenantId === activeTenant?.id) {
+  const handleSwitch = (brandId: string) => {
+    const brand = brands.find((b) => b.id === brandId)
+    if (!brand || brandId === activeBrand?.id) {
       setIsOpen(false)
       return
     }
-    await switchTenant(tenantId)
+
+    localStorage.setItem(ACTIVE_BRAND_KEY, brandId)
+    setActiveBrand(brand)
     setIsOpen(false)
+
+    // Reload page to refresh data for new brand
+    window.location.reload()
   }
 
   const handleCreateBrand = () => {
-    // Navigate to brand creation wizard
     setIsOpen(false)
     router.push('/brands/new')
   }
@@ -60,12 +99,12 @@ export function BrandSwitcher({ collapsed = false }: BrandSwitcherProps) {
     )
   }
 
-  if (!activeTenant) {
+  if (!activeBrand) {
     return null
   }
 
   // Get initials for avatar
-  const initials = activeTenant.name
+  const initials = activeBrand.name
     .split(' ')
     .map(word => word[0])
     .join('')
@@ -83,7 +122,7 @@ export function BrandSwitcher({ collapsed = false }: BrandSwitcherProps) {
           'border border-white/5 hover:border-white/10',
           isOpen && 'border-jsb-pink/30 bg-jsb-pink/5'
         )}
-        title={collapsed ? activeTenant.name : undefined}
+        title={collapsed ? activeBrand.name : undefined}
       >
         {/* Brand Avatar */}
         <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-jsb-pink/80 to-jsb-pink flex items-center justify-center flex-shrink-0">
@@ -93,8 +132,7 @@ export function BrandSwitcher({ collapsed = false }: BrandSwitcherProps) {
         {!collapsed && (
           <>
             <div className="flex-1 text-left min-w-0">
-              <p className="text-sm font-medium text-white truncate">{activeTenant.name}</p>
-              <p className="text-xs text-gray-500 capitalize">{activeTenant.role}</p>
+              <p className="text-sm font-medium text-white truncate">{activeBrand.name}</p>
             </div>
 
             {/* Chevron */}
@@ -123,13 +161,13 @@ export function BrandSwitcher({ collapsed = false }: BrandSwitcherProps) {
 
           {/* Brand list */}
           <div className="max-h-48 overflow-y-auto">
-            {tenants.map((tenant) => (
+            {brands.map((brand) => (
               <button
-                key={tenant.id}
-                onClick={() => handleSwitch(tenant.id)}
+                key={brand.id}
+                onClick={() => handleSwitch(brand.id)}
                 className={cn(
                   'w-full flex items-center gap-3 px-3 py-2 text-left transition-colors',
-                  tenant.id === activeTenant.id
+                  brand.id === activeBrand.id
                     ? 'bg-jsb-pink/10 text-jsb-pink'
                     : 'text-gray-300 hover:bg-jsb-navy-lighter hover:text-white'
                 )}
@@ -137,21 +175,21 @@ export function BrandSwitcher({ collapsed = false }: BrandSwitcherProps) {
                 {/* Brand Avatar */}
                 <div className={cn(
                   'w-7 h-7 rounded-md flex items-center justify-center flex-shrink-0',
-                  tenant.id === activeTenant.id
+                  brand.id === activeBrand.id
                     ? 'bg-jsb-pink'
                     : 'bg-jsb-navy-lighter'
                 )}>
                   <span className="text-white text-xs font-medium">
-                    {tenant.name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2)}
+                    {brand.name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2)}
                   </span>
                 </div>
 
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium truncate">{tenant.name}</p>
+                  <p className="text-sm font-medium truncate">{brand.name}</p>
                 </div>
 
                 {/* Check mark for active */}
-                {tenant.id === activeTenant.id && (
+                {brand.id === activeBrand.id && (
                   <svg className="w-4 h-4 text-jsb-pink flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                   </svg>
